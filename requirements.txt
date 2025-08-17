@@ -1,0 +1,12 @@
+torch
+numpy
+anndata
+scanpy
+pyyaml
+tqdm
+scikit-image
+pyvista
+
+# 以下库需要特殊安装
+# tinycudann (https://github.com/NVlabs/tiny-cuda-nn)
+# nerfacc (推荐，用于加速渲染: https://github.com/nerfstudio-project/nerfacc)

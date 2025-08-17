@@ -1,0 +1,33 @@
+# configs/default_config.yaml
+data:
+  path: "data/registered_crc_sample.h5ad"
+  slice_thickness: 10.0 # 单位: 微米
+
+model:
+  encoder:
+    otype: "HashGrid"
+    n_levels: 16
+    n_features_per_level: 2
+    log2_hashmap_size: 19
+    base_resolution: 16
+    per_level_scale: 2.0
+  network:
+    otype: "FullyFusedMLP"
+    activation: "ReLU"
+    output_activation: "None"
+    n_neurons: 64
+    n_hidden_layers: 2
+
+rendering:
+  num_samples: 64 # 每条光线的采样点数
+
+training:
+  batch_size: 4096 # spot的数量
+  epochs: 20
+  lr: 0.001
+  save_every: 5 # 每5个epoch保存一次模型
+
+losses:
+  w_recon: 1.0
+  w_geom: 0.01
+  w_smooth: 0.01
