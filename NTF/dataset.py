@@ -2,24 +2,42 @@
 import torch
 import anndata
 import numpy as np
+from typing import Union
 
 class SpatialOmicsDataset(torch.utils.data.Dataset):
     """
-    用于空间组学数据的PyTorch Dataset.
-    假设输入数据是经过配准的 AnnData 对象，其中 Z 坐标已添加.
+    PyTorch Dataset for Spatial Omics Data.
+    We assume the input is AnnData object, Z axis has been added to adata.obsm['spatial_3d'].
+
+    Parameters
+    ----------
+    adata_input : Union[str, anndata.AnnData]
+        Either a path to an h5ad file or an AnnData object directly
     """
-    def __init__(self, adata_path: str):
-        adata = anndata.read_h5ad(adata_path)
+    def __init__(self, adata_input: Union[str, anndata.AnnData]):
+        # Handle input - can be either path or AnnData object
+        if isinstance(adata_input, str):
+            adata = anndata.read_h5ad(adata_input)
+        elif isinstance(adata_input, anndata.AnnData):
+            adata = adata_input
+        else:
+            raise TypeError("Input must be either a path (str) or an AnnData object")
         
-        # 提取坐标 (需要包含Z轴信息)
+        # load spatial coordinates
         if 'spatial_3d' not in adata.obsm:
             raise ValueError("AnnData object must have 'spatial_3d' in .obsm after registration.")
         self.coords = torch.from_numpy(adata.obsm['spatial_3d'].astype(np.float32))
         
-        # 提取基因表达
-        self.expressions = torch.from_numpy(adata.X.toarray().astype(np.float32)) # 确保是稠密矩阵
+        # extract gene expression matrix
+        if not isinstance(adata.X, np.ndarray):
+            if hasattr(adata.X, "toarray"):
+                self.expressions = torch.from_numpy(adata.X.toarray().astype(np.float32))
+            else:
+                raise ValueError("adata.X is not a numpy array or sparse matrix with toarray() method.")
+        else:
+            self.expressions = torch.from_numpy(adata.X.astype(np.float32))
         
-        # 计算数据边界，用于损失函数采样
+        # calculate bounds
         self.bounds = (self.coords.min(dim=0).values, self.coords.max(dim=0).values)
 
     def __len__(self):

@@ -9,17 +9,16 @@ except ImportError:
 
 class NeuralTranscriptomicField(nn.Module):
     """
-    神经转录组场 (NTF) 模型.
-    
-    该模型将一个3D坐标映射到一个G+1维的输出 (G个基因表达 + 1个密度).
+    Neural Transcriptome Field (NTF) Model.
+    This model maps a 3D coordinate to a G+1-dimensional output (G gene expression + 1 density).
     """
     def __init__(self, num_genes: int, config: dict):
         """
-        初始化NTF模型.
-        
-        参数:
-            num_genes (int): 数据集中的基因总数 (G).
-            config (dict): 包含编码器和MLP配置的字典.
+        Initializes the NTF model.
+
+        Parameters:
+            num_genes (int): The total number of genes in the dataset (G).
+            config (dict): A dictionary containing the encoder and MLP configuration.
         """
         super().__init__()
         if tcnn is None:
@@ -27,46 +26,44 @@ class NeuralTranscriptomicField(nn.Module):
 
         self.num_genes = num_genes
         
-        # 定义多分辨率哈希编码器
+        # define multi-resolution hashing encoder
         self.encoder = tcnn.Encoding(
-            n_input_dims=3,  # 输入是3D坐标 (x, y, z)
+            n_input_dims=3,  # input is 3D coordinates (x, y, z)
             encoding_config=config["encoder"]
         )
         
-        # 定义用于预测基因和密度的小型MLP
+        # define MLP for gene expression and density prediction
         self.mlp = tcnn.Network(
-            n_input_dims=self.encoder.n_output_dims, # 输入维度是编码器的输出维度
-            n_output_dims=self.num_genes + 1,        # 输出维度是 基因数 + 1 (密度)
+            n_input_dims=self.encoder.n_output_dims, # input dimension is the output of the encoder
+            n_output_dims=self.num_genes + 1,        # output dimension is G (gene expressions) + 1 (density)
             network_config=config["network"]
         )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        模型的前向传播.
+        Forward pass of the model.
 
-        参数:
-            x (torch.Tensor): 输入的3D坐标张量, shape为 (N, 3).
+        Parameters:
+            x (torch.Tensor): Input 3D coordinate tensor, shape (N, 3).
 
-        返回:
-            tuple[torch.Tensor, torch.Tensor]: 基因表达谱和密度.
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: Gene expression profiles and densities.
                 - gene_expressions (torch.Tensor): shape (N, num_genes)
                 - density (torch.Tensor): shape (N, 1)
         """
-        # 1. 对输入坐标进行编码
+        # 1. encode the input coordinates
         features = self.encoder(x)
         
-        # 2. 通过MLP进行预测
-        # tiny-cuda-nn的MLP输出是FP16，需要转为FP32
+        # 2. predict gene expressions and density using MLP
+        # output of tiny-cuda-nn is in float16, convert to float32 for consistency
         outputs = self.mlp(features).to(torch.float32)
         
-        # 3. 分离输出为基因表达和密度
+        # 3. seperate gene expressions and density
         gene_expressions = outputs[..., :self.num_genes]
         density = outputs[..., self.num_genes:]
         
-        # 4. 应用激活函数
-        # 基因表达通常是非负稀疏的，ReLU或Softplus是好的选择
+        # 4. activate the outputs
         gene_expressions = torch.relu(gene_expressions) 
-        # 密度必须为非负
         density = torch.relu(density)
         
         return gene_expressions, density

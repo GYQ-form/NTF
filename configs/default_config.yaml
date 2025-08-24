@@ -1,7 +1,7 @@
 # configs/default_config.yaml
 data:
   path: "data/registered_crc_sample.h5ad"
-  slice_thickness: 10.0 # 单位: 微米
+  slice_thickness: 0.15
 
 model:
   encoder:
@@ -19,15 +19,21 @@ model:
     n_hidden_layers: 2
 
 rendering:
-  num_samples: 64 # 每条光线的采样点数
+  num_samples: 6 # 每条光线的采样点数
 
 training:
-  batch_size: 4096 # spot的数量
-  epochs: 20
+  batch_size: 16384 # spot的数量
+  epochs: 100
   lr: 0.001
   save_every: 5 # 每5个epoch保存一次模型
+  early_stopping:
+    enabled: true
+    patience: 10      # 在验证损失没有改善的情况下，等待10个epoch
+    min_delta: 0.001 # 认为验证损失的改善小于此值不算改善
+    val_fraction: 0.1
 
 losses:
   w_recon: 1.0
-  w_geom: 0.01
-  w_smooth: 0.01
+  positive_weight: 1.0
+  w_geom: 0.1
+  w_smooth: 0.1
