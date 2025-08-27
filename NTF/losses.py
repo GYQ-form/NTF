@@ -1,66 +1,40 @@
-# losses.py
+# ntf/losses.py
 import torch
+import torch.nn.functional as F
 
-# def reconstruction_loss(predicted_genes, target_genes, loss_type='l2'):
-#     """calculate reconstruction loss between predicted and target gene expressions."""
-#     if loss_type == 'l1':
-#         return torch.nn.functional.l1_loss(predicted_genes, target_genes)
-#     else:
-#         return torch.nn.functional.mse_loss(predicted_genes, target_genes)
-
-def reconstruction_loss(predicted_genes, target_genes, positive_weight=10):
+class ReconstructionLoss(torch.nn.Module):
     """
-    计算重建损失.
-    新增 positive_weight 参数以解决稀疏性问题.
-    
-    参数:
-        predicted_genes (torch.Tensor): 模型的预测值.
-        target_genes (torch.Tensor): 真实的基因表达值.
-        positive_weight (float): 对非零真实值的损失所乘的权重.
+    Negative log-likelihood loss for a diagonal multivariate Gaussian.
     """
-    # 计算每个元素的误差 (例如, L2误差)
-    error = torch.pow((predicted_genes - target_genes),2)
-    
-    # 创建一个与target_genes形状相同的权重张量
-    # 真实值 > 0 的位置权重为 positive_weight, 否则为 1.0
-    weights = torch.ones_like(target_genes)
-    weights[target_genes > 0] = positive_weight
-    
-    # 将误差与权重相乘
-    weighted_error = error * weights
-    
-    # 返回加权误差的均值
-    return weighted_error.mean()
+    def __init__(self):
+        super().__init__()
 
-def geometric_loss(model, bounds, num_points=1024*16, epsilon=0.01):
+    def forward(self, g_true, g_bar, g_var):
+        term1 = torch.log(g_var).sum(dim=1)
+        term2 = ((g_true - g_bar).pow(2) / g_var).sum(dim=1)
+        loss = 0.5 * (term1 + term2)
+        return loss.mean()
+
+class SmoothnessLoss(torch.nn.Module):
     """
-    Encourage smooth density fields by penalizing density differences between neighboring points
+    Enforces smoothness by penalizing differences between predictions
+    at nearby points.
     """
-    min_bound, max_bound = bounds
-
-    # 1. randomly sample points within the bounds
-    points = torch.rand(num_points, 3, device=min_bound.device) * (max_bound - min_bound) + min_bound
+    def __init__(self, noise_std: float = 0.1):
+        super().__init__()
+        self.noise_std = noise_std
     
-    # 2. perturb points slightly
-    noise = (torch.rand_like(points) * 2 - 1) * epsilon
-    perturbed_points = torch.clamp(points + noise, min_bound, max_bound)
+    def forward(self, model, coords, slice_ids):
+        # Create perturbed coordinates
+        noise = torch.randn_like(coords) * self.noise_std
+        perturbed_coords = coords + noise
 
-    _, density_orig = model(points)
-    _, density_perturbed = model(perturbed_points)
+        # Get predictions for both original and perturbed coordinates
+        preds_orig = model(coords, slice_ids)
+        preds_pert = model(perturbed_coords, slice_ids)
 
-    return torch.nn.functional.mse_loss(density_orig, density_perturbed)
-
-
-def smoothness_loss(model, bounds, num_points=1024*16, epsilon=0.01):
-    """calculate smoothness loss, ensuring neighboring points have similar outputs."""
-    min_bound, max_bound = bounds
-    points1 = torch.rand(num_points, 3, device=min_bound.device) * (max_bound - min_bound) + min_bound
-    
-    # sample points with small perturbations
-    noise = (torch.rand_like(points1) * 2 - 1) * epsilon
-    points2 = torch.clamp(points1 + noise, min_bound, max_bound)
-    
-    g1, _ = model(points1)
-    g2, _ = model(points2)
-    
-    return torch.nn.functional.mse_loss(g1, g2)
+        # Calculate MSE for density and conditional gene expression
+        loss_v = F.mse_loss(preds_orig["v"], preds_pert["v"])
+        loss_g = F.mse_loss(preds_orig["g_hat"], preds_pert["g_hat"])
+        
+        return loss_v, loss_g

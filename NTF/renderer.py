@@ -1,87 +1,75 @@
 # renderer.py
 import torch.nn as nn
 import torch
+from .model import NeuralTranscriptomicField
+from typing import Union, Tuple, List
 
-def sample_points_along_rays(
-    origins: torch.Tensor, 
-    slice_thickness: float, 
-    num_samples: int
-) -> torch.Tensor:
+class Renderer:
     """
-    Sampling along rays perpendicular to the XY plane.
-
-    Parameters:
-        origins (torch.Tensor): The center coordinates of the spot (N, 3).
-        slice_thickness (float): The slice thickness.
-        num_samples (int): The number of sampling points per ray.
-
-    Returns:
-        torch.Tensor: The sampling point coordinates, shape (N, num_samples, 3).
+    Handles the Monte Carlo rendering process to simulate the acquisition model.
     """
-    N = origins.shape[0]
-    t_vals = torch.linspace(0.0, 1.0, steps=num_samples, device=origins.device)
-    z_offsets = (t_vals - 0.5) * slice_thickness
-    
-    sample_points = origins.unsqueeze(1).expand(-1, num_samples, -1).clone()
-    sample_points[..., 2] += z_offsets.unsqueeze(0)
-    
-    return sample_points, z_offsets
+    def __init__(self, model: NeuralTranscriptomicField, psf_std: Union[float, Tuple[float, float, float], List[float]] = 1.0):
+        self.model = model
 
-def volume_render(
-    model: nn.Module,
-    origins: torch.Tensor,
-    slice_thickness: float,
-    num_samples: int
-) -> torch.Tensor:
-    """
-    Perform volume rendering on a set of rays and calculate the final gene expression profile.
+        # Handle isotropic vs. anisotropic PSF standard deviation
+        if isinstance(psf_std, (float, int)):
+            psf_std_tensor = torch.tensor([psf_std, psf_std, psf_std], dtype=torch.float32)
+        elif isinstance(psf_std, (tuple, list)) and len(psf_std) == 3:
+            psf_std_tensor = torch.tensor(psf_std, dtype=torch.float32)
+        else:
+            raise ValueError("psf_std must be a float or a list/tuple of 3 floats.")
+            
+        # Reshape for broadcasting: (1, 1, 3)
+        self.psf_std_tensor = psf_std_tensor.view(1, 1, 3)
 
-    Parameters:
-        model (nn.Module): NTF model.
-        origins (torch.Tensor): The center coordinates of the spot (N, 3).
-        slice_thickness (float): The slice thickness.
-        num_samples (int): The number of samples per ray.
+    def render_spots(self, spot_coords: torch.Tensor, slice_ids: torch.Tensor, K: int = 16):
+        """
+        Renders the expected gene expression for a batch of spots using MC sampling.
+        
+        Args:
+            spot_coords (torch.Tensor): Spot coordinates, shape (N, 3).
+            slice_ids (torch.Tensor): Slice IDs for each spot, shape (N,).
+            K (int): Number of Monte Carlo samples per spot.
+            
+        Returns:
+            tuple: Rendered mean (g_bar) and variance (g_var) of gene expression.
+        """
+        batch_size = spot_coords.shape[0]
+        device = spot_coords.device
+        self.psf_std_tensor = self.psf_std_tensor.to(device)
 
-    Returns:
-        torch.Tensor: The rendered gene expression vector, shape (N, num_genes).
-    """
-    # 1. sample points along rays
-    points, z_vals = sample_points_along_rays(origins, slice_thickness, num_samples) # points shape: (N, num_samples, 3)
-    
-    # 2. inquire the model for gene expression and sigma values
-    points_flat = points.view(-1, 3)
-    g_vals, sigma_vals = model(points_flat)
-    
-    g_vals = g_vals.view(points.shape[0], points.shape[1], -1)
-    sigma_vals = sigma_vals.view(points.shape[0], points.shape[1])
-    
-    # 3. 以批处理方式正确计算距离和alpha权重
-    # 获取每个采样点的z坐标 (shape: N, num_samples)
-    z_coords = points[..., 2]
-    
-    # 计算相邻采样点之间的距离 (shape: N, num_samples - 1)
-    dists = z_coords[:, 1:] - z_coords[:, :-1]
-    
-    # 为最后一个采样区间创建一个非常大的距离 (shape: N, 1)
-    # This correctly creates a value for each ray in the batch.
-    infinity_dist = torch.full((dists.shape[0], 1), 1e10, device=origins.device)
-    
-    # 将所有距离拼接在一起 (shape: N, num_samples)
-    dists = torch.cat([dists, infinity_dist], dim=-1)
-    
-    # 计算alpha值, alpha = 1 - exp(-sigma * delta)
-    # 这里的 dists 和 sigma_vals 形状都是 (N, num_samples)，可以安全地逐元素相乘
-    alpha = 1.0 - torch.exp(-sigma_vals * dists)
-    
-    # calculate transmittance: T_i = product(1 - alpha_{j}) for j < i
-    transmittance = torch.cumprod(torch.cat([
-        torch.ones(alpha.shape[0], 1, device=origins.device), 
-        1. - alpha + 1e-10
-    ], -1), -1)[:, :-1]
-    
-    weights = alpha * transmittance
-    
-    # 4. integrate the gene values
-    rendered_genes = torch.sum(weights.unsqueeze(-1) * g_vals, 1)
-    
-    return rendered_genes
+        # 1. Monte Carlo Sampling to simulate PSF
+        noise = torch.randn(batch_size, K, 3, device=device) * self.psf_std_tensor
+        sampled_coords = spot_coords.unsqueeze(1) + noise # (N, K, 3)
+        flat_sampled_coords = sampled_coords.reshape(-1, 3) # (N * K, 3)
+
+        # 2. Repeat slice_ids for each sample
+        flat_slice_ids = slice_ids.unsqueeze(1).repeat(1, K).reshape(-1) # (N * K,)
+        
+        # 3. Get predictions from the model at sampled points
+        preds = self.model(flat_sampled_coords, flat_slice_ids)
+        
+        # 4. Aggregate samples to get rendered spot expression
+        # 4a. Reshape predictions
+        v_samples = preds["v"].view(batch_size, K, 1)
+        g_hat_samples = preds["g_hat"].view(batch_size, K, -1)
+        b_samples = preds["b"].view(batch_size, K, -1)
+        sigma2_samples = preds["sigma2"].view(batch_size, K, -1)
+
+        # 4b. Apply acquisition model
+        total_g_samples = v_samples * g_hat_samples
+        biased_g_samples = b_samples * total_g_samples
+        
+        g_bar = torch.mean(biased_g_samples, dim=1) # (N, n_genes)
+        
+        biased_sigma2_samples = b_samples.pow(2) * sigma2_samples
+        g_var = torch.mean(biased_sigma2_samples, dim=1) # (N, n_genes)
+
+        # 4c. Apply slice scaling factor
+        slice_scales_all = torch.softmax(self.model.slice_scaling_unconstrained, dim=0) * self.model.slice_embeddings.num_embeddings
+        slice_scales = slice_scales_all[slice_ids]
+        
+        g_bar = slice_scales.unsqueeze(1) * g_bar
+        g_var = slice_scales.unsqueeze(1).pow(2) * g_var + 1e-8 # Add epsilon for stability
+
+        return g_bar, g_var

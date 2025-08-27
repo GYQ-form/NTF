@@ -3,48 +3,44 @@ import torch
 import anndata
 import numpy as np
 from typing import Union
+import pandas as pd
+from torch.utils.data import Dataset
 
-class SpatialOmicsDataset(torch.utils.data.Dataset):
+class SpatialOmicsDataset(Dataset):
     """
-    PyTorch Dataset for Spatial Omics Data.
-    We assume the input is AnnData object, Z axis has been added to adata.obsm['spatial_3d'].
+    A PyTorch Dataset to handle AnnData objects for spatial omics.
 
-    Parameters
-    ----------
-    adata_input : Union[str, anndata.AnnData]
-        Either a path to an h5ad file or an AnnData object directly
+    Args:
+        adata (anndata.AnnData): The AnnData object containing the data.
+            It must have .obsm['spatial'], .obs[slice_id_key], and .X.
     """
-    def __init__(self, adata_input: Union[str, anndata.AnnData]):
-        # Handle input - can be either path or AnnData object
-        if isinstance(adata_input, str):
-            adata = anndata.read_h5ad(adata_input)
-        elif isinstance(adata_input, anndata.AnnData):
-            adata = adata_input
+    def __init__(self, adata: anndata.AnnData, slice_id_key: str = 'slice_id'):
+        super().__init__()
+        
+        # 1. Extract coordinates
+        self.coords = torch.from_numpy(adata.obsm['spatial']).float()
+        
+        # 2. Extract and encode slice IDs
+        if not pd.api.types.is_categorical_dtype(adata.obs[slice_id_key]):
+            adata.obs[slice_id_key] = adata.obs[slice_id_key].astype('category')
+        self.slice_ids = torch.from_numpy(adata.obs['slice_id'].cat.codes.to_numpy().copy()).long()
+        
+        # 3. Extract gene expression
+        if hasattr(adata.X, "toarray"):
+            self.genes = torch.from_numpy(adata.X.toarray()).float()
         else:
-            raise TypeError("Input must be either a path (str) or an AnnData object")
-        
-        # load spatial coordinates
-        if 'spatial_3d' not in adata.obsm:
-            raise ValueError("AnnData object must have 'spatial_3d' in .obsm after registration.")
-        self.coords = torch.from_numpy(adata.obsm['spatial_3d'].astype(np.float32))
-        
-        # extract gene expression matrix
-        if not isinstance(adata.X, np.ndarray):
-            if hasattr(adata.X, "toarray"):
-                self.expressions = torch.from_numpy(adata.X.toarray().astype(np.float32))
-            else:
-                raise ValueError("adata.X is not a numpy array or sparse matrix with toarray() method.")
-        else:
-            self.expressions = torch.from_numpy(adata.X.astype(np.float32))
-        
-        # calculate bounds
-        self.bounds = (self.coords.min(dim=0).values, self.coords.max(dim=0).values)
+            self.genes = torch.from_numpy(adata.X).float()
+            
+        self.n_spots = adata.n_obs
+        self.n_genes = adata.n_vars
+        self.n_slices = len(adata.obs[slice_id_key].cat.categories)
 
     def __len__(self):
-        return self.coords.shape[0]
+        return self.n_spots
 
     def __getitem__(self, idx):
         return {
-            "origin": self.coords[idx],
-            "target_genes": self.expressions[idx],
+            "coords": self.coords[idx],
+            "slice_id": self.slice_ids[idx],
+            "genes": self.genes[idx]
         }
