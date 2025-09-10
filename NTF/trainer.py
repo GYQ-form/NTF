@@ -91,6 +91,7 @@ class Trainer:
         epoch_pbar = tqdm(range(self.config.get('epochs',200)), desc="Training Progress")
 
         try:
+            step = 0
             for epoch in epoch_pbar:
                 self.model.train()
                 total_loss = 0
@@ -114,8 +115,12 @@ class Trainer:
                                     self.config.get('lambda_g',0.2) * loss_g)
                     
                     total_loss_val.backward()
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                     self.optimizer.step()
                     total_loss += total_loss_val.item()
+
+                    self.writer.add_scalar('Loss/train_step', total_loss_val.item(), step)
+                    step += 1
                     
                     batch_pbar.set_postfix({'loss': f'{total_loss_val.item():.4f}'})
 
@@ -123,7 +128,7 @@ class Trainer:
                 avg_loss = total_loss / len(train_loader)
                 
                 # --- Logging to TensorBoard ---
-                self.writer.add_scalar('Loss/train', avg_loss, epoch)
+                self.writer.add_scalar('Loss/train_epoch', avg_loss, epoch)
                 self.writer.add_scalar('LearningRate', self.scheduler.get_last_lr()[0], epoch)
 
                 # Update outer progress bar description

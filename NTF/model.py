@@ -64,6 +64,7 @@ class NeuralTranscriptomicField(nn.Module):
         self.latent_dim = latent_dim
         self.embedding_dim = embedding_dim
         self.n_bias_levels = n_bias_levels
+        self.n_features_per_level = n_features_per_level
 
         # --- Slice-specific Trainable Parameters ---
         self.slice_embeddings = nn.Embedding(n_slices, embedding_dim)
@@ -97,7 +98,17 @@ class NeuralTranscriptomicField(nn.Module):
         )
 
         # b. gene predictor (Transformer + MLP)
-        self.gene_predictor = GenePredictor(latent_dim, n_genes)
+        self.gene_predictor = tcnn.Network(
+            n_input_dims=latent_dim,
+            n_output_dims=n_genes,
+            network_config={
+                "otype": "FullyFusedMLP",
+                "activation": "ReLU",
+                "output_activation": "ReLU",
+                "n_neurons": 64,
+                "n_hidden_layers": 2, # 1 hidden layer + 1 output layer = 2-layer MLP
+            }
+        )
 
         # c. MLP_B: predicts bias field B_i(x)
         # input: low-freq encodings + slice embedding -> output: B_i(x) (n_genes)
@@ -110,23 +121,38 @@ class NeuralTranscriptomicField(nn.Module):
                 "activation": "ReLU",
                 "output_activation": "Softplus",
                 "n_neurons": 64,
-                "n_hidden_layers": 2,
+                "n_hidden_layers": 1,
             },
         )
         
         # d. MLP_sigma: predicts noise variance sigma_i^2(x)
         # input: z(x) + slice embedding -> output: sigma_i^2(x) (n_genes)
-        self.net_sigma = tcnn.Network(
-            n_input_dims=latent_dim + embedding_dim,
-            n_output_dims=n_genes,
-            network_config={
-                "otype": "FullyFusedMLP",
-                "activation": "ReLU",
-                "output_activation": "Softplus",
-                "n_neurons": 64,
-                "n_hidden_layers": 2,
-            },
-        )       
+        # self.net_sigma = tcnn.Network(
+        #     n_input_dims=latent_dim + embedding_dim,
+        #     n_output_dims=n_genes,
+        #     network_config={
+        #         "otype": "FullyFusedMLP",
+        #         "activation": "ReLU",
+        #         "output_activation": "Softplus",
+        #         "n_neurons": 64,
+        #         "n_hidden_layers": 1,
+        #     },
+        # )
+
+        # Instead of a tcnn.Network, we use nn.Sequential to get fine-grained control.
+        self.net_sigma = nn.Sequential(
+            nn.Linear(latent_dim + embedding_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
+            nn.Softplus() # The final activation is still Softplus
+        )
+        
+        # Apply the custom initialization to the final linear layer of net_sigma
+        # We target the second Linear layer, which is at index -2.
+        with torch.no_grad():
+            self.net_sigma[-2].bias.fill_(0)
+            # You can also initialize weights for better practice
+            nn.init.kaiming_normal_(self.net_sigma[-2].weight, mode='fan_in', nonlinearity='relu')       
 
     def forward(self, coords: torch.Tensor, slice_ids: torch.Tensor, K: int = 64):
         """
@@ -157,11 +183,11 @@ class NeuralTranscriptomicField(nn.Module):
         # 5. Predict B_i(x)
         n_low_freq_features = self.n_features_per_level * self.n_bias_levels
         low_freq_enc = all_level_encodings[:, :n_low_freq_features]
-        bias_input = torch.cat([low_freq_enc, slice_embs], dim=1)
+        bias_input = torch.cat([low_freq_enc, slice_embs], dim=1).contiguous()
         b = self.net_b(bias_input)
         
         # 6. Predict sigma_i^2(x)
-        sigma_input = torch.cat([z.detach(), slice_embs], dim=1)
+        sigma_input = torch.cat([z.detach(), slice_embs], dim=1).contiguous()
         sigma2 = self.net_sigma(sigma_input)
-        
+
         return {"v": v, "g_hat": g_hat, "b": b, "sigma2": sigma2}

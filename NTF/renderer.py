@@ -54,22 +54,28 @@ class Renderer:
         v_samples = preds["v"].view(batch_size, K, 1)
         g_hat_samples = preds["g_hat"].view(batch_size, K, -1)
         b_samples = preds["b"].view(batch_size, K, -1)
-        sigma2_samples = preds["sigma2"].view(batch_size, K, -1)
+        # sigma2_samples = preds["sigma2"].view(batch_size, K, -1)
 
         # 4b. Apply acquisition model
         total_g_samples = v_samples * g_hat_samples
         biased_g_samples = b_samples * total_g_samples
-        
         g_bar = torch.mean(biased_g_samples, dim=1) # (N, n_genes)
+
+
+        sigma2_samples = preds["sigma2"].view(batch_size, K, 1) # Shape is now (N, K, 1)
+        # Average the scalar variances from all samples for that spot
+        # We simplify here by not having the bias field affect the variance
+        intrinsic_spot_var = torch.mean(sigma2_samples, dim=1) # Shape becomes (N, 1)
         
-        biased_sigma2_samples = b_samples.pow(2) * sigma2_samples
-        g_var = torch.mean(biased_sigma2_samples, dim=1) # (N, n_genes)
+        
+        # biased_sigma2_samples = b_samples.pow(2) * sigma2_samples
+        # g_var = torch.mean(biased_sigma2_samples, dim=1) # (N, n_genes)
 
         # 4c. Apply slice scaling factor
         slice_scales_all = torch.softmax(self.model.slice_scaling_unconstrained, dim=0) * self.model.slice_embeddings.num_embeddings
         slice_scales = slice_scales_all[slice_ids]
         
         g_bar = slice_scales.unsqueeze(1) * g_bar
-        g_var = slice_scales.unsqueeze(1).pow(2) * g_var + 1e-8 # Add epsilon for stability
+        g_var = slice_scales.unsqueeze(1).pow(2) * intrinsic_spot_var + 1e-6 # Add epsilon for stability
 
         return g_bar, g_var
