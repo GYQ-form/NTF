@@ -4,11 +4,8 @@
 # File Name: __init__.py
 # Description:
 """
-from .dataset import SpatialOmicsDataset
-from .model import NeuralTranscriptomicField
-from .renderer import Renderer
-from .losses import ReconstructionLoss, SmoothnessLoss
-from .trainer import Trainer
+from .data import SpatialOmicsDataset
+from .models import NeuralTranscriptomicField
 
 __author__ = "Yuqiao Gong"
 __email__ = "gyq123@sjtu.edu.cn"
