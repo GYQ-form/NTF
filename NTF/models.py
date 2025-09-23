@@ -24,8 +24,9 @@ except Exception as e:
 D_LOSS = "MSE"
 S_LOSS = "logVar"
 DS_LOSS = "MSE+logVar"
+DO_LOSS = "DropoutBCE"
 B_REG = "biasReg"
-I_REG = "imageReg"
+E_REG = "exprReg"
 
 def build_encoding(**config):
     if USE_TORCH:
@@ -73,29 +74,6 @@ def build_network(**config):
         return nn.Sequential(*models)
 
 
-# def compute_resolution_nlevel(
-#     bounding_box: torch.Tensor,
-#     coarsest_resolution: float,
-#     finest_resolution: float,
-#     level_scale: float,
-# ) -> Tuple[int, int]:
-#     # --- 修正: 移除了 spatial_scaling 参数 ---
-#     # 假设传入的 bounding_box 已经是缩放后的
-#     bbox_size = (bounding_box[1] - bounding_box[0]).max()
-    
-#     base_resolution = (bbox_size / coarsest_resolution).ceil().int().item()
-    
-#     # 防止 base_resolution 过小
-#     base_resolution = max(2, base_resolution)
-
-#     n_levels = (
-#         torch.log2(finest_resolution * bbox_size / (base_resolution * coarsest_resolution)) / log2(level_scale) + 1
-#     ).ceil().int().item()
-    
-#     print(f"Computed base_resolution: {base_resolution}, n_levels: {n_levels}")
-#     return int(base_resolution), int(n_levels)
-
-
 class GeneINR(nn.Module):
     def __init__(
         self,
@@ -106,6 +84,7 @@ class GeneINR(nn.Module):
         super().__init__()
         self.register_buffer("bounding_box", bounding_box)
         self.n_genes = n_genes
+        self.args = args
         
         base_resolution = getattr(args, 'base_resolution', 2)
         n_levels = getattr(args, 'n_levels', 8)
@@ -125,6 +104,17 @@ class GeneINR(nn.Module):
             n_neurons=args.width, n_hidden_layers=args.depth,
             dtype=args.dtype,
         )
+
+        if not args.no_dropout:
+            self.dropout_net = build_network(
+                n_input_dims=self.encoding.n_output_dims,
+                n_output_dims=n_genes,
+                activation="ReLU",
+                output_activation="Sigmoid",
+                n_neurons=args.width,
+                n_hidden_layers=args.depth,
+                dtype=args.dtype,
+            )
 
         logging.debug(
             "hyperparameters for hash grid encoding: "
@@ -146,13 +136,19 @@ class GeneINR(nn.Module):
         
         z = self.expression_net(pe)
         z = z.view(*prefix_shape, -1)
+        if not self.args.no_dropout:
+            do_prob = self.dropout_net(pe)
+            do_prob = do_prob.view(*prefix_shape, -1)
 
         expression = F.softplus(z[..., :self.n_genes])
         
+
         if self.training:
-            return expression, pe, z
+            return expression, do_prob, pe, z
         else:
-            return expression
+            return expression, do_prob
+        # return expression, pe, z
+
 
     def sample_batch(
         self,
@@ -207,18 +203,14 @@ class NeuralTranscriptomicField(nn.Module):
             
         self.inr = GeneINR(self.n_genes, bounding_box, self.args)
         
+        
         if not self.args.no_pixel_variance:
             self.sigma_net = build_network(
                 n_input_dims=self.args.n_features_slice + self.args.n_features_z,
                 n_output_dims=self.n_genes, activation="ReLU", output_activation="None",
                 n_neurons=self.args.width, n_hidden_layers=1, dtype=self.args.dtype,
             )
-            
-        self.dropout_net = build_network(
-                n_input_dims=self.args.n_features_slice + self.args.n_features_z,
-                n_output_dims=self.n_genes, activation="ReLU", output_activation="None",
-                n_neurons=self.args.width, n_hidden_layers=1, dtype=self.args.dtype,
-            )
+        
 
         if self.args.n_levels_bias > 0:
             n_encoding_dims = self.args.n_levels_bias * self.args.n_features_per_level
@@ -236,37 +228,53 @@ class NeuralTranscriptomicField(nn.Module):
     ) -> Dict[str, Any]:
         
         n_samples = self.args.n_samples
-        # Simplified PSF sigma for batch processing
         psf_sigma_batch = self.psf_sigma.to(xyz.device)
-        
         xyz_sampled = self.inr.sample_batch(xyz, psf_sigma_batch, n_samples)
-
         se = self.slice_embedding(slice_idx)[:, None].expand(-1, n_samples, -1) if self.args.n_features_slice > 0 else None
             
         results = self.net_forward(xyz_sampled, se)
         
         v_out_samples = results["expression"]
-        
         log_bias = results.get("log_bias", torch.tensor(0))
         bias = torch.exp(log_bias)
-        
         v_out = (bias * v_out_samples).mean(1)
-
         var = torch.exp(results.get("log_var", 0))
-        var = (bias.detach() * var).mean(1)
-        var = var ** 2 # Convert std to var
-
         if not self.args.no_slice_variance:
             var = var + self.log_var_slice.exp()[slice_idx]
+        var = (bias.detach()**2 * var).mean(1)
 
-        loss_d = ((v_out - v) ** 2 / (2 * var)).mean()
-        loss_s = 0.5 * var.log().mean()
-        losses = {D_LOSS: loss_d, S_LOSS: loss_s, DS_LOSS: loss_d + loss_s}
+        losses = {}
+        if not self.args.no_dropout:
+            # 1. 计算 Dropout 损失
+            target_is_zero = (v == 0).float() # 目标：真实表达是否为0
+            dropout_prob = results["dropout_prob"].mean(1) # 对采样点取平均
+            loss_do = F.binary_cross_entropy(dropout_prob, target_is_zero, pos_weight=torch.tensor(0.3, device=v.device))
+            losses[DO_LOSS] = loss_do
+
+            # 2. 只在非零值上计算原有损失
+            non_zero_mask = (v > 0)
+            if non_zero_mask.sum() > 0:
+                loss_d = ((v_out[non_zero_mask] - v[non_zero_mask]) ** 2 / (2 * var[non_zero_mask])).mean()
+                loss_s = 0.5 * var[non_zero_mask].log().mean()
+            else: # 如果一个batch全是0，则损失为0
+                loss_d = torch.tensor(0.0, device=v.device)
+                loss_s = torch.tensor(0.0, device=v.device)
+            losses[D_LOSS] = loss_d
+            losses[S_LOSS] = loss_s
+            losses[DS_LOSS] = loss_d + loss_s
+        else:
+            # 保持原有逻辑
+            loss_d = ((v_out - v) ** 2 / (2 * var)).mean()
+            loss_s = 0.5 * var.log().mean()
+            losses[D_LOSS] = loss_d
+            losses[S_LOSS] = loss_s
+            losses[DS_LOSS] = loss_d + loss_s
+
 
         if self.args.n_levels_bias > 0:
             losses[B_REG] = log_bias.mean() ** 2
             
-        losses[I_REG] = self.expression_reg(v_out_samples, xyz_sampled)
+        losses[E_REG] = self.expression_reg(v_out_samples, xyz_sampled)
 
         return losses
 
@@ -275,9 +283,9 @@ class NeuralTranscriptomicField(nn.Module):
         x: torch.Tensor,
         se: Optional[torch.Tensor] = None,
     ) -> Dict[str, Any]:
-        expression, pe, z = self.inr(x)
+        expression, do_prob, pe, z = self.inr(x)
         prefix_shape = expression.shape[:-1]
-        results = {"expression": expression}
+        results = {"expression": expression, "dropout_prob": do_prob}
 
         zs = []
         if se is not None:
@@ -291,8 +299,11 @@ class NeuralTranscriptomicField(nn.Module):
 
         if not self.args.no_pixel_variance:
             z_var = z.view(-1, z.shape[-1])[..., self.n_genes:]
-            sigma_input = torch.cat(zs + [z_var], -1)
-            results["log_var"] = self.sigma_net(sigma_input).view(*prefix_shape, self.n_genes)
+            var_input = torch.cat(zs + [z_var], -1)
+            results["log_var"] = self.sigma_net(var_input).view(*prefix_shape, self.n_genes)
+
+        if not self.training:
+            results["z"] = z
 
         return results
 

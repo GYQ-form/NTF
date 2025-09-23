@@ -9,7 +9,7 @@ import anndata
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 
-from .models import NeuralTranscriptomicField, GeneINR, D_LOSS, S_LOSS, DS_LOSS, I_REG, B_REG
+from .models import NeuralTranscriptomicField, GeneINR, D_LOSS, S_LOSS, DS_LOSS, DO_LOSS, E_REG, B_REG
 from .data import SpatialOmicsDataset
 from .utils import MovingAverage
 
@@ -59,7 +59,7 @@ def train(
     
     model.train()
     loss_weights = {
-        D_LOSS: 1, S_LOSS: 1, B_REG: args.weight_bias, I_REG: args.weight_image,
+        D_LOSS: 1, S_LOSS: 1, B_REG: args.weight_bias, E_REG: args.weight_expr, DO_LOSS: args.weight_dropout,
     }
     average = MovingAverage(1 - 0.001)
     
@@ -80,8 +80,9 @@ def train(
         with torch.amp.autocast('cuda',enabled=fp16):
             losses = model(**batch)
             loss = losses[DS_LOSS] + \
-                   loss_weights.get(B_REG, 0) * losses.get(B_REG, 0) + \
-                   loss_weights.get(I_REG, 0) * losses.get(I_REG, 0)
+                loss_weights.get(DO_LOSS, 0) * losses.get(DO_LOSS, 0) + \
+                loss_weights.get(B_REG, 0) * losses.get(B_REG, 0) + \
+                loss_weights.get(E_REG, 0) * losses.get(E_REG, 0)
 
         scaler.scale(loss).backward()
         scaler.step(optimizer)
@@ -92,24 +93,28 @@ def train(
         for k in losses:
             if losses[k] is not None:
                 average(k, losses[k].item())
+        average('All', loss.item())
         
         # --- Update tqdm progress bar with live metrics ---
-        pbar.set_postfix({
-            'Loss': f'{average[DS_LOSS]:.4f}',
+        postfix_dict = {
+            'DSLoss': f'{average[DS_LOSS]:.4f}',
             'MSE': f'{average[D_LOSS]:.4f}',
             'LR': f'{optimizer.param_groups[0]["lr"]:.1e}'
-        })
+        }
+        if not args.no_dropout:
+            postfix_dict['DOLoss'] = f'{average[DO_LOSS]:.4f}'
+        pbar.set_postfix(postfix_dict)
 
         # --- Periodic Logging and Early Stopping Check ---
         if i % check_interval == 0 or i == args.n_iter:
-            current_loss = average[DS_LOSS]
+            current_loss = average['All']
             
             # --- Log to TensorBoard ---
             writer.add_scalar('Loss/total_moving_avg', current_loss, i)
             # writer.add_scalar('Loss/mse_moving_avg', average[D_LOSS], i)
             # writer.add_scalar('Loss/logvar_moving_avg', average[S_LOSS], i)
-            # if I_REG in average:
-            #     writer.add_scalar('Loss/reg_image_moving_avg', average[I_REG], i)
+            # if E_REG in average:
+            #     writer.add_scalar('Loss/reg_image_moving_avg', average[E_REG], i)
             # if B_REG in average:
             #     writer.add_scalar('Loss/reg_bias_moving_avg', average[B_REG], i)
             # writer.add_scalar('LearningRate', optimizer.param_groups[0]['lr'], i)
