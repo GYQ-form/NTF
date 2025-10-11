@@ -240,7 +240,7 @@ class NeuralTranscriptomicField(nn.Module):
         v_out = (bias * v_out_samples).mean(1)
         var = torch.exp(results.get("log_var", 0))
         if not self.args.no_slice_variance:
-            var = var + self.log_var_slice.exp()[slice_idx]
+            var = var + self.log_var_slice.exp()[slice_idx].unsqueeze(1)
         var = (bias.detach()**2 * var).mean(1)
 
         losses = {}
@@ -248,7 +248,7 @@ class NeuralTranscriptomicField(nn.Module):
             # 1. 计算 Dropout 损失
             target_is_zero = (v == 0).float() # 目标：真实表达是否为0
             dropout_prob = results["dropout_prob"].mean(1) # 对采样点取平均
-            loss_do = F.binary_cross_entropy(dropout_prob, target_is_zero, pos_weight=torch.tensor(0.3, device=v.device))
+            loss_do = F.binary_cross_entropy(dropout_prob, target_is_zero)
             losses[DO_LOSS] = loss_do
 
             # 2. 只在非零值上计算原有损失
