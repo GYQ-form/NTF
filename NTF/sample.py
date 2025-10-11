@@ -30,11 +30,12 @@ def sample_points(
             results = model(xyz_batch[:, None])
             
             # 2. 获取预测的表达值
-            v_pred = results["expression"].squeeze(1) # 移除n_samples维度
+            v_pred = results[0].squeeze(1) # 移除n_samples维度
             
             if not model.args.no_dropout:
                 # 3. 获取dropout概率
-                dropout_prob = results["dropout_prob"].squeeze(1)
+                dropout_logits = results[1].squeeze(1)
+                dropout_prob = torch.sigmoid(dropout_logits)
                 dropout_probs_tensor[s] = dropout_prob
                 
                 # 4. 大于阈值则进行dropout
@@ -44,9 +45,6 @@ def sample_points(
                 v_batch = v_pred * dropout_mask
             else:
                 v_batch = v_pred
-
-            dropout_prob = results["dropout_prob"].squeeze(1)
-            dropout_probs_tensor[s] = dropout_prob
             # --- End Inference Logic ---
                 
             v[s] = v_batch

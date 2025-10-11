@@ -110,7 +110,7 @@ class GeneINR(nn.Module):
                 n_input_dims=self.encoding.n_output_dims,
                 n_output_dims=n_genes,
                 activation="ReLU",
-                output_activation="Sigmoid",
+                output_activation="None",
                 n_neurons=args.width,
                 n_hidden_layers=args.depth,
                 dtype=args.dtype,
@@ -137,16 +137,16 @@ class GeneINR(nn.Module):
         z = self.expression_net(pe)
         z = z.view(*prefix_shape, -1)
         if not self.args.no_dropout:
-            do_prob = self.dropout_net(pe)
-            do_prob = do_prob.view(*prefix_shape, -1)
+            do_logits = self.dropout_net(pe)
+            do_logits = do_logits.view(*prefix_shape, -1)
 
         expression = F.softplus(z[..., :self.n_genes])
         
 
         if self.training:
-            return expression, do_prob, pe, z
+            return expression, do_logits, pe, z
         else:
-            return expression, do_prob
+            return expression, do_logits
         # return expression, pe, z
 
 
@@ -176,6 +176,7 @@ class NeuralTranscriptomicField(nn.Module):
         resolution: torch.Tensor,
         bounding_box: torch.Tensor,
         args: Namespace,
+        pos_weight: Optional[torch.Tensor] = None,
     ) -> None:
         super().__init__()
         global USE_TORCH
@@ -187,6 +188,7 @@ class NeuralTranscriptomicField(nn.Module):
         self.n_genes = n_genes
         # Use a simplified resolution sigma, assuming uniform for all slices for now
         self.psf_sigma = resolution2sigma(resolution, isotropic=False)
+        self.pos_weight = pos_weight
         self.build_network(bounding_box)
         self.to(args.device)
 
@@ -247,8 +249,8 @@ class NeuralTranscriptomicField(nn.Module):
         if not self.args.no_dropout:
             # 1. 计算 Dropout 损失
             target_is_zero = (v == 0).float() # 目标：真实表达是否为0
-            dropout_prob = results["dropout_prob"].mean(1) # 对采样点取平均
-            loss_do = F.binary_cross_entropy(dropout_prob, target_is_zero)
+            dropout_logits = results["dropout_logits"].mean(1) # 对采样点取平均
+            loss_do = F.binary_cross_entropy_with_logits(dropout_logits, target_is_zero, pos_weight=self.pos_weight.to(v.device))
             losses[DO_LOSS] = loss_do
 
             # 2. 只在非零值上计算原有损失
@@ -283,9 +285,9 @@ class NeuralTranscriptomicField(nn.Module):
         x: torch.Tensor,
         se: Optional[torch.Tensor] = None,
     ) -> Dict[str, Any]:
-        expression, do_prob, pe, z = self.inr(x)
+        expression, do_logits, pe, z = self.inr(x)
         prefix_shape = expression.shape[:-1]
-        results = {"expression": expression, "dropout_prob": do_prob}
+        results = {"expression": expression, "dropout_logits": do_logits}
 
         zs = []
         if se is not None:

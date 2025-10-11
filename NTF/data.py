@@ -62,7 +62,14 @@ class SpatialOmicsDataset:
         xyz_min = self.xyz.amin(0) - margin
         xyz_max = self.xyz.amax(0) + margin
         return torch.stack([xyz_min, xyz_max], 0)
-
+    
+    @property
+    def nonzero_to_zero_ratio(self) -> torch.Tensor:
+        nonzero = (self.v > 0).float().sum(0)
+        zero = (self.v == 0).float().sum(0)
+        ratio = torch.where(nonzero == 0, torch.tensor(1.0, device=nonzero.device), nonzero / zero)
+        return ratio   
+    
     @property
     def expression_mean(self) -> torch.Tensor:
         return self.v.mean(0)

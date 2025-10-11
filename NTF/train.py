@@ -41,6 +41,7 @@ def train(
         n_genes=dataset.n_genes, n_slices=dataset.n_slices,
         resolution=dataset.resolution,
         bounding_box=bounding_box, args=args,
+        pos_weight=dataset.nonzero_to_zero_ratio,
     )
     
     optimizer = torch.optim.Adam(
@@ -136,8 +137,7 @@ def train(
                     break
         
         # Scheduler Step
-        if i in [int(m * args.n_iter) for m in args.milestones]:
-            scheduler.step()
+        scheduler.step()
 
     pbar.close() # 关闭进度条
     writer.close() # 关闭TensorBoard writer
