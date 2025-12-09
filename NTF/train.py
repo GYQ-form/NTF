@@ -112,19 +112,13 @@ def train(
             
             # --- Log to TensorBoard ---
             writer.add_scalar('Loss/total_moving_avg', current_loss, i)
-            # writer.add_scalar('Loss/mse_moving_avg', average[D_LOSS], i)
-            # writer.add_scalar('Loss/logvar_moving_avg', average[S_LOSS], i)
-            # if E_REG in average:
-            #     writer.add_scalar('Loss/reg_image_moving_avg', average[E_REG], i)
-            # if B_REG in average:
-            #     writer.add_scalar('Loss/reg_bias_moving_avg', average[B_REG], i)
-            # writer.add_scalar('LearningRate', optimizer.param_groups[0]['lr'], i)
 
             # --- Early Stopping Logic ---
             if i > warmup_iters:
                 if best_loss - current_loss > min_delta:
                     best_loss = current_loss
                     patience_counter = 0
+                    torch.save(model.state_dict(), os.path.join(args.output_dir, 'best_model.pth'))
                 else:
                     patience_counter += 1
                 
@@ -134,6 +128,7 @@ def train(
 
                 if patience_counter >= patience:
                     tqdm.write(f"Early stopping triggered at iteration {i}.")
+                    model.load_state_dict(torch.load(os.path.join(args.output_dir, 'best_model.pth')))
                     break
         
         # Scheduler Step

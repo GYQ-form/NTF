@@ -139,6 +139,8 @@ class GeneINR(nn.Module):
         if not self.args.no_dropout:
             do_logits = self.dropout_net(pe)
             do_logits = do_logits.view(*prefix_shape, -1)
+        else:
+            do_logits = None
 
         expression = F.softplus(z[..., :self.n_genes])
         
