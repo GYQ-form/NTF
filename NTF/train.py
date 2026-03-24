@@ -72,7 +72,7 @@ def train(
     logging.info("NeuralTranscriptomicField training starts.")
     
     # --- tqdm Progress Bar ---
-    # 使用tqdm包装主循环，并设置一个描述
+    # Wrap main loop with tqdm and set a description
     pbar = tqdm(range(1, args.n_iter + 1), desc="Training NeuralTranscriptomicField")
 
     for i in pbar:
@@ -134,8 +134,8 @@ def train(
         # Scheduler Step
         scheduler.step()
 
-    pbar.close() # 关闭进度条
-    writer.close() # 关闭TensorBoard writer
+    pbar.close() # close progress bar
+    writer.close() # close TensorBoard writer
     logging.info("Training finished.")
     
     return model

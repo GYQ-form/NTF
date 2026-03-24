@@ -34,9 +34,9 @@ class SpatialOmicsDataset:
     @staticmethod
     def _estimate_resolution(xyz: torch.Tensor, n_samples: int = 2000) -> torch.Tensor:
         """
-        高效估计分辨率：随机采样点做最近邻统计，适用于百万级数据。
-        支持 torch.Tensor 或 np.ndarray 输入。
-        返回 shape=[3] 的每轴分辨率估计。
+        Efficiently estimate resolution: sample random points for nearest-neighbor statistics, suitable for millions of data points.
+        Accepts torch.Tensor or np.ndarray input.
+        Returns resolution estimate per axis with shape=[3].
         """
         xyz_np = xyz.cpu().numpy() if isinstance(xyz, torch.Tensor) else xyz
         N = xyz_np.shape[0]
@@ -46,7 +46,7 @@ class SpatialOmicsDataset:
         tree = cKDTree(xyz_np)
         dists, _ = tree.query(xyz_sample, k=2)
         nn_dists = dists[:, 1]
-        # 各轴分开估计
+        # Estimate per axis separately
         per_axis_median = []
         for axis in range(3):
             diffs = xyz_sample[None, :, axis] - xyz_np[:, None, axis]
