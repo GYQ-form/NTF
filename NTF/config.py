@@ -6,18 +6,18 @@ import logging
 
 def add_shared_args(description="NTF Model Training"):
     """
-    定义并解析所有命令行参数。
+    Define and parse all command-line arguments.
     
-    参数:
-    - description: 命令行帮助信息的描述文本。
+    Parameters:
+    - description: Description text for command-line help.
     
-    返回:
-    - args: 解析后的参数命名空间对象。
+    Returns:
+    - parser: Argument parser object.
     """
     parser = argparse.ArgumentParser(description=description, add_help=False)
 
     # ==========================================
-    #           1. 核心 I/O 参数
+    #           1. Core I/O Parameters
     # ==========================================
     io_group = parser.add_argument_group('Input/Output')
     io_group.add_argument('--input_data','-i', type=str, required=True, help='Path to your .h5ad file. If not provided, mock data will be used.')
@@ -26,7 +26,7 @@ def add_shared_args(description="NTF Model Training"):
     io_group.add_argument('--slice_id', type=str, default='brain_section_label', help='Column in adata.obs indicating slice IDs.')
     
     # ==========================================
-    #           2. 训练参数 (Training)
+    #           2. Training Parameters
     # ==========================================
     train_group = parser.add_argument_group('Training Parameters')
     train_group.add_argument('--device', type=str, default='cuda:0' if torch.cuda.is_available() else 'cpu', help='Device to use for training.')
@@ -39,7 +39,7 @@ def add_shared_args(description="NTF Model Training"):
 
 
     # ==========================================
-    #           3. 模型结构参数 (Model Architecture)
+    #           3. Model Architecture Parameters
     # ==========================================
     model_group = parser.add_argument_group('Model Architecture')
     model_group.add_argument('--base_resolution', type=int, default=2)
@@ -57,7 +57,7 @@ def add_shared_args(description="NTF Model Training"):
     model_group.add_argument('--n_levels_bias', type=int, default=0, help='Levels for bias network.')
     
     # ==========================================
-    #           4. 损失与正则化 (Loss & Regularization)
+    #           4. Loss & Regularization
     # ==========================================
     loss_group = parser.add_argument_group('Loss and Regularization')
     loss_group.add_argument('--weight_expr', type=float, default=0.1, help='Weight for expression regularization.')
@@ -68,7 +68,7 @@ def add_shared_args(description="NTF Model Training"):
     loss_group.add_argument('--early_stopping_delta', type=float, default=1e-4, help='Min delta for early stopping.')
     loss_group.add_argument('--early_stopping_check_interval', type=int, default=200, help='Iteration interval for early stopping check.')
     
-    # Dropout 相关
+    # Dropout-related
     loss_group.add_argument('--no_dropout', action='store_true', help='Disable the dropout prediction network to handle zero-inflation.')
     loss_group.add_argument('--weight_dropout', type=float, default=2000.0, help='Weight for dropout loss.')
     
@@ -77,16 +77,16 @@ def add_shared_args(description="NTF Model Training"):
 
 def process_args(args):
     """
-    对解析后的参数进行通用的后处理（设置设备、数据类型、创建目录）。
+    Perform common post-processing on parsed arguments (set device, dtype, create directories).
     """
-    # 1. 数据类型
+    # 1. Data type
     args.dtype = torch.float32 if args.single_precision else torch.float16
 
-    # 2. 自动设备选择
+    # 2. Automatic device selection
     if args.device == 'auto':
         args.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
-    # 4. 确保目录存在
+    # 3. Ensure output directory exists
     os.makedirs(args.output_dir, exist_ok=True)
     
     return args

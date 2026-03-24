@@ -249,25 +249,25 @@ class NeuralTranscriptomicField(nn.Module):
 
         losses = {}
         if not self.args.no_dropout:
-            # 1. 计算 Dropout 损失
-            target_is_zero = (v == 0).float() # 目标：真实表达是否为0
-            dropout_logits = results["dropout_logits"].mean(1) # 对采样点取平均
+            # 1. Compute dropout loss
+            target_is_zero = (v == 0).float() # target: whether the true expression is zero
+            dropout_logits = results["dropout_logits"].mean(1) # average over sampled points
             loss_do = F.binary_cross_entropy_with_logits(dropout_logits, target_is_zero, pos_weight=self.pos_weight.to(v.device))
             losses[DO_LOSS] = loss_do
 
-            # 2. 只在非零值上计算原有损失
+            # 2. Compute reconstruction loss only on non-zero values
             non_zero_mask = (v > 0)
             if non_zero_mask.sum() > 0:
                 loss_d = ((v_out[non_zero_mask] - v[non_zero_mask]) ** 2 / (2 * var[non_zero_mask])).mean()
                 loss_s = 0.5 * var[non_zero_mask].log().mean()
-            else: # 如果一个batch全是0，则损失为0
+            else: # if the entire batch is zero, loss is 0
                 loss_d = torch.tensor(0.0, device=v.device)
                 loss_s = torch.tensor(0.0, device=v.device)
             losses[D_LOSS] = loss_d
             losses[S_LOSS] = loss_s
             losses[DS_LOSS] = loss_d + loss_s
         else:
-            # 保持原有逻辑
+            # Standard reconstruction loss
             loss_d = ((v_out - v) ** 2 / (2 * var)).mean()
             loss_s = 0.5 * var.log().mean()
             losses[D_LOSS] = loss_d
@@ -313,32 +313,32 @@ class NeuralTranscriptomicField(nn.Module):
 
     def expression_reg(self, expression, xyz):
         """
-        计算平滑度正则化损失。
-        根据 args.image_regularization 的值选择不同的策略。
+        Compute smoothness regularization loss.
+        Selects different strategies based on the value of args.weight_expr.
         """
         if self.args.weight_expr == 0:
             return 0.0
 
-        # 1. 从输入的采样点中取一部分用于计算正则化，避免计算量过大
+        # 1. Use a subset of sampled points for regularization to reduce computation
         n_sample = min(4, expression.shape[1])
         xyz_sub = xyz[:, :n_sample].flatten(0, 1)
         expr_sub = expression[:, :n_sample].flatten(0, 1)
 
-        # 2. 在每个点的周围，通过添加一个小的随机扰动来创建“邻近点”
-        #    扰动范围是 [-radius, +radius]
+        # 2. Create "neighbor points" around each point by adding a small random perturbation
+        #    within the range [-radius, +radius]
         radius = self.args.reg_neighbor_radius
-        with torch.no_grad(): # 创建邻近点不需要梯度
-            # 生成一个 [-1, 1] 的随机方向向量
+        with torch.no_grad(): # no gradient needed for creating neighbor points
+            # Generate a random direction vector in [-1, 1]
             perturbation = (torch.rand_like(xyz_sub) * 2 - 1) 
-            # 将其缩放到指定的半径内
+            # Scale to the specified radius
             perturbation *= radius
             xyz_neighbor = xyz_sub + perturbation
 
-        # 3. 计算这些邻近点的基因表达预测值
-        #    这里只需要一次标准的前向传播，不会有 double backward 问题
+        # 3. Compute gene expression predictions at neighbor points
+        #    A single standard forward pass avoids double-backward issues
         neighbor_expression = self.inr(xyz_neighbor)[0] if self.inr.training else self.inr(xyz_neighbor)
 
-        # 4. 计算原始点与邻近点表达值的均方误差作为损失
-        #    目标是让 expr_sub 和 neighbor_expression 尽可能接近
+        # 4. Compute MSE between original and neighbor expression as the regularization loss,
+        #    encouraging smoothness in the predicted expression field
         loss = torch.mean((expr_sub - neighbor_expression) ** 2)
         return loss
