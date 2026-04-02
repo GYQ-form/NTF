@@ -7,29 +7,34 @@ from skimage.metrics import structural_similarity as ssim
 
 def normalize_adata(adata: anndata.AnnData, layer: str = None):
     """
-    将 AnnData 中的基因表达量进行非零区域的 Min-Max 标准化。
-    0 值保持为 0，非零值被线性映射到 0.1 ~ 1.0 之间。
-    
-    参数:
-    - adata: AnnData 对象
-    - layer: 指定要处理的 layer 名称，如果为 None，则默认处理 adata.X
-    
-    返回:
-    - 处理后的 AnnData 对象 (就地修改)
+    Perform non-zero Min-Max normalisation on gene expression in an AnnData object.
+    Zero values are kept as 0; non-zero values are linearly mapped to the range 0.1–1.0.
+
+    Parameters
+    ----------
+    adata : AnnData
+        The AnnData object to normalise.
+    layer : str, optional
+        Name of the layer to process. If None, adata.X is used.
+
+    Returns
+    -------
+    AnnData
+        The AnnData object modified in-place.
     """
-    # 确定要操作的矩阵
+    # Determine the matrix to operate on
     matrix = adata.layers[layer] if layer else adata.X
     
-    # 检查是否为稀疏矩阵
+    # Check whether the matrix is sparse
     is_sparse = sp.issparse(matrix)
     
     if is_sparse:
-        # 为了高效地按列（基因）进行操作，将其转换为 CSC 格式
-        # 操作 .data 属性可以完美避开所有的 0 值，极致节省内存
+        # Convert to CSC for efficient column-wise operations;
+        # operating on .data avoids touching stored zeros and minimises memory usage
         mat_csc = matrix.tocsc()
         
         for i in range(mat_csc.shape[1]):
-            # 获取第 i 列所有的非零数据
+            # Retrieve all non-zero values in column i
             start_idx = mat_csc.indptr[i]
             end_idx = mat_csc.indptr[i+1]
             col_data = mat_csc.data[start_idx:end_idx]
@@ -40,40 +45,40 @@ def normalize_adata(adata: anndata.AnnData, layer: str = None):
                 range_val = max_val - min_val
                 
                 if range_val > 0:
-                    # 线性映射到 0.1 ~ 1.0
+                    # Linearly map to 0.1–1.0
                     mat_csc.data[start_idx:end_idx] = 0.1 + 0.9 * ((col_data - min_val) / range_val)
                 else:
-                    # 如果该基因所有非零细胞的表达量都完全一样，直接将其设为 1.0
+                    # All non-zero cells have identical expression; set to 1.0
                     mat_csc.data[start_idx:end_idx] = 1.0
                     
-        # 存回原来的位置（通常 scanpy 习惯使用 CSR 格式，所以转回 CSR）
+        # Write back; scanpy typically expects CSR format
         result_matrix = mat_csc.tocsr()
         
     else:
-        # 密集矩阵 (Dense np.ndarray) 处理逻辑
+        # Dense (np.ndarray) processing
         eps = 1e-6
         is_nonzero = matrix > eps
         
-        # 找到非零的最小值
+        # Find the non-zero minimum per gene
         masked_expr = np.where(is_nonzero, matrix, np.inf)
         min_vals_nonzero = masked_expr.min(axis=0)
-        min_vals_nonzero[np.isinf(min_vals_nonzero)] = 0.0  # 处理全零基因
+        min_vals_nonzero[np.isinf(min_vals_nonzero)] = 0.0  # Handle all-zero genes
         
-        # 找到最大值并计算极差
+        # Find the maximum per gene and compute the range
         max_vals = matrix.max(axis=0)
         range_vals = max_vals - min_vals_nonzero
-        range_vals[range_vals <= 0] = 1.0  # 防止除以 0
+        range_vals[range_vals <= 0] = 1.0  # Avoid division by zero
         
         result_matrix = np.zeros_like(matrix)
         
-        # 计算映射
+        # Compute the linear mapping
         scaled_expr = 0.1 + 0.9 * ((matrix - min_vals_nonzero) / range_vals)
         
-        # 仅替换非零位置
+        # Replace only the non-zero positions
         result_matrix[is_nonzero] = scaled_expr[is_nonzero]
         result_matrix = np.clip(result_matrix, 0.0, 1.0)
         
-    # 将处理后的结果写回 adata
+    # Write the processed result back to adata
     if layer:
         adata.layers[layer] = result_matrix
     else:
@@ -83,25 +88,32 @@ def normalize_adata(adata: anndata.AnnData, layer: str = None):
 
 def calculate_spatial_metrics(adata: sc.AnnData, prediction_layer: str = 'prediction', spatial_key: str = 'spatial'):
     """
-    计算每个基因的RMSE和三维SSIM，并动态处理SSIM的窗口大小。
+    Compute per-gene RMSE and 3D SSIM, dynamically adapting the SSIM window size.
 
-    参数:
-    - adata: AnnData 对象。
-    - prediction_layer: 存储预测值的层的名称。
-    - spatial_key: 存储空间坐标的obsm键名。
+    Parameters
+    ----------
+    adata : AnnData
+        AnnData object containing ground-truth expression in adata.X and predictions
+        in adata.layers[prediction_layer].
+    prediction_layer : str
+        Name of the layer holding predicted expression values.
+    spatial_key : str
+        Key in adata.obsm holding 3D spatial coordinates.
 
-    返回:
-    - AnnData: 更新后的AnnData对象，在 .var 中添加了 'rmse' 和 'ssim_3d' 列。
+    Returns
+    -------
+    AnnData
+        Updated AnnData with 'rmse' and 'ssim_3d' columns added to adata.var.
     """
-    # 确保 AnnData 对象包含所需数据
+    # Validate inputs
     if prediction_layer not in adata.layers:
-        raise ValueError(f"错误: 在 .layers 中未找到预测层 '{prediction_layer}'。")
+        raise ValueError(f"Prediction layer '{prediction_layer}' not found in .layers.")
     if spatial_key not in adata.obsm:
-        raise ValueError(f"错误: 在 .obsm 中未找到空间坐标 '{spatial_key}'。")
+        raise ValueError(f"Spatial key '{spatial_key}' not found in .obsm.")
     if adata.obsm[spatial_key].shape[1] != 3:
-        raise ValueError(f"错误: obsm['{spatial_key}'] 中的坐标应为三维。")
+        raise ValueError(f"obsm['{spatial_key}'] should contain 3D coordinates.")
 
-    # --- 1. 计算每个基因的 RMSE ---
+    # --- 1. Compute per-gene RMSE ---
     true_expr = adata.X
     pred_expr = adata.layers[prediction_layer]
     
@@ -112,32 +124,31 @@ def calculate_spatial_metrics(adata: sc.AnnData, prediction_layer: str = 'predic
 
     rmse_per_gene = np.sqrt(np.mean((true_expr - pred_expr)**2, axis=0))
     adata.var['rmse'] = rmse_per_gene
-    print("已计算所有基因的RMSE。")
+    print("RMSE computed for all genes.")
 
-    # --- 2. 计算每个基因的三维 SSIM ---
+    # --- 2. Compute per-gene 3D SSIM ---
     coords = adata.obsm[spatial_key].astype(int)
     grid_dims = coords.max(axis=0) + 1
     
-    # --- 新增：动态确定SSIM的win_size ---
+    # Dynamically determine SSIM window size (must be odd and <= smallest grid dimension)
     min_dim = min(grid_dims)
     
-    # win_size必须是奇数且小于等于最小维度
     if min_dim % 2 == 0:
         win_size = min_dim - 1
     else:
         win_size = min_dim
         
-    # 如果win_size太小，SSIM没有意义，无法计算
     if win_size < 3:
         warnings.warn(
-            f"空间网格的最小维度是 {min_dim}，太小而无法计算有意义的SSIM（需要至少为3）。"
-            f"将跳过所有基因的SSIM计算，并将结果设置为 NaN。",
+            f"The smallest spatial grid dimension is {min_dim}, which is too small for "
+            f"meaningful SSIM computation (minimum 3 required). "
+            f"SSIM will be skipped and set to NaN for all genes.",
             UserWarning
         )
         adata.var['ssim_3d'] = np.nan
         return
     
-    print(f"空间网格维度为: {grid_dims}。将使用 win_size={win_size} 进行SSIM计算。")
+    print(f"Spatial grid dimensions: {grid_dims}. Using win_size={win_size} for SSIM.")
     
     ssim_scores = []
     
@@ -157,13 +168,12 @@ def calculate_spatial_metrics(adata: sc.AnnData, prediction_layer: str = 'predic
         if data_range == 0:
             current_ssim = 1.0
         else:
-            # 使用动态计算的win_size
             current_ssim = ssim(true_volume, pred_volume, data_range=data_range, win_size=win_size)
         
         ssim_scores.append(current_ssim)
         
         if (i + 1) % 10 == 0 or (i + 1) == adata.n_vars:
-             print(f"已处理 {i + 1}/{adata.n_vars} 个基因的SSIM计算...")
+             print(f"SSIM computed for {i + 1}/{adata.n_vars} genes...")
 
     adata.var['ssim_3d'] = ssim_scores
-    print("已计算所有基因的三维SSIM。")
+    print("3D SSIM computed for all genes.")

@@ -7,7 +7,6 @@ import os
 import pickle
 import pandas as pd
 
-# 导入你的包
 from NTF.train import train
 from NTF.config import add_shared_args, process_args
 
@@ -21,7 +20,6 @@ def get_args():
     )
     parser.add_argument('--alpha_multiplier', type=float, default=14.0, 
                         help='Multiplier for average distance to determine Alpha Shape.')
-    # 新增参数：保存定性变量供后续 KNN 投票
     parser.add_argument('--cat_keys', type=str, nargs='+', default=[],
                         help='List of categorical variables in adata.obs to prepare for sectioning prediction.')
     
@@ -32,7 +30,7 @@ def main():
     args = get_args()
     os.makedirs(args.output_dir, exist_ok=True)
     
-    # --- 1. 加载并预处理数据 ---
+    # --- 1. Load and preprocess data ---
     logging.info(f"Loading data from {args.input_data}...")
     adata = anndata.read_h5ad(args.input_data)
     adata.obsm['spatial'] = adata.obsm['spatial'].astype(np.float32)
@@ -44,28 +42,27 @@ def main():
     
     logging.info(f"Spatial scaling factor: {spatial_scaling:.6f}")
 
-    # ================= 提取定性变量数据 =================
+    # --- Extract categorical variable data for KNN voting ---
     obs_categories = {}
     if args.cat_keys:
         for key in args.cat_keys:
             if key in adata.obs:
                 cat_series = pd.Categorical(adata.obs[key])
                 obs_categories[key] = {
-                    'codes': cat_series.codes,                      # 整数数组
-                    'categories': cat_series.categories.tolist()    # 字符串列表
+                    'codes': cat_series.codes,
+                    'categories': cat_series.categories.tolist()
                 }
-                logging.info(f"提取定性变量 '{key}' (共 {len(cat_series.categories)} 类)")
+                logging.info(f"Extracted categorical variable '{key}' ({len(cat_series.categories)} classes)")
             else:
-                logging.warning(f"变量 '{key}' 不在 adata.obs 中，跳过。")
-    # ====================================================
+                logging.warning(f"Variable '{key}' not found in adata.obs; skipping.")
 
-    # --- 2. 训练模型 ---
+    # --- 2. Train model (training time is logged automatically) ---
     logging.info("Training model...")
     trained_NTF = train(adata, args)
     trained_inr = trained_NTF.inr
 
-    # --- 3. 生成非凸 Mesh 表面数据 (Alpha Shape) ---
-    logging.info("Computing Non-convex Alpha Shape for 3D mesh representation...")
+    # --- 3. Build non-convex mesh surface (Alpha Shape) ---
+    logging.info("Computing non-convex Alpha Shape for 3D mesh representation...")
     try:
         import open3d as o3d
         pcd = o3d.geometry.PointCloud()
@@ -92,7 +89,7 @@ def main():
         logging.error("Open3D is not installed.")
         return
 
-    # --- 4. 保存所有需要的资产 ---
+    # --- 4. Save all required assets ---
     model_path = os.path.join(args.output_dir, 'trained_inr.pt')
     torch.save(trained_inr, model_path)
     
@@ -103,7 +100,7 @@ def main():
         'avg_dist': avg_dist,          
         'spatial_scaling': spatial_scaling,
         'gene_names': adata.var.gene_symbol.tolist() if 'gene_symbol' in adata.var.columns else adata.var_names.tolist(),
-        'obs_categories': obs_categories, # 存入定性变量用于 KNN
+        'obs_categories': obs_categories,
         'raw_coords_min': raw_coords.min(axis=0),
         'raw_coords_max': raw_coords.max(axis=0)
     }

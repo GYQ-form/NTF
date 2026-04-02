@@ -15,7 +15,7 @@ import os
 
 from NTF.sample import sample_points
 
-# --- 1. 加载资产 ---
+# --- 1. Load assets ---
 ASSETS_DIR = '/home/gongyuqiao/ur_annotation/NTF/mytrain/data/sectioning/mouse_embryo'
 with open(f'{ASSETS_DIR}/metadata.pkl', 'rb') as f:
     meta = pickle.load(f)
@@ -26,14 +26,14 @@ raw_coords = meta['raw_coords']
 avg_dist = meta['avg_dist']
 spatial_scaling = meta['spatial_scaling']
 gene_names = meta['gene_names']
-obs_categories = meta.get('obs_categories', {})  # 字典 {key: {'codes': [], 'categories': []}}
+obs_categories = meta.get('obs_categories', {})  # dict: {key: {'codes': [], 'categories': []}}
 cat_keys = list(obs_categories.keys())
 
 bbox_min = meta['raw_coords_min']
 bbox_max = meta['raw_coords_max']
 center = (bbox_min + bbox_max) / 2
 
-# 构建 KD 树（既用于边界判定，也用于 KNN 投票）
+# Build KD-tree (used for boundary check and KNN voting)
 kdtree = cKDTree(raw_coords)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -41,7 +41,7 @@ model_path = f'{ASSETS_DIR}/trained_inr.pt'
 model = torch.load(model_path, map_location=device, weights_only=False)
 model.eval()
 
-# --- 2. 辅助函数 ---
+# --- 2. Helper functions ---
 def get_plane_vectors(normal):
     normal = normal / np.linalg.norm(normal)
     not_v = np.array([1, 0, 0]) if abs(normal[0]) < 0.9 else np.array([0, 1, 0])
@@ -54,21 +54,22 @@ def sample_points_on_plane(point, normal, n_spots, bbox_min, bbox_max):
     u, v = get_plane_vectors(normal)
     
     radius = np.linalg.norm(bbox_max - bbox_min)
-    # 生成过量的点，因为后续会基于表达量进行大量过滤
+    # Generate extra points because many will be filtered by expression later
     grid_res = int(np.sqrt(n_spots * 10))
     lin = np.linspace(-radius, radius, grid_res)
     U, V = np.meshgrid(lin, lin)
     
     candidates_3d = point + np.outer(U.flatten(), u) + np.outer(V.flatten(), v)
     
-    # 这里使用一个非常宽泛的物理阈值(20倍)仅仅是为了剔除距离组织极其遥远的无效空间，节省GPU显存
+    # Use a very generous physical threshold (20x) to remove points far outside
+    # the tissue bounding region and save GPU memory
     distances, _ = kdtree.query(candidates_3d)
     mask_generous = distances < (avg_dist * 20.0)
     
     valid_points_3d = candidates_3d[mask_generous]
     valid_uv = np.column_stack((U.flatten()[mask_generous], V.flatten()[mask_generous]))
     
-    # 随机保留最多 n_spots * 3 个候选点送入模型预测
+    # Randomly subsample to at most n_spots * 3 candidates before model inference
     max_candidates = n_spots * 3
     if len(valid_points_3d) > max_candidates:
         idx = np.random.choice(len(valid_points_3d), max_candidates, replace=False)
@@ -77,14 +78,14 @@ def sample_points_on_plane(point, normal, n_spots, bbox_min, bbox_max):
     return valid_points_3d, valid_uv
 
 
-# --- 3. Dash UI 构建 ---
+# --- 3. Build Dash UI ---
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
 app.layout = dbc.Container([
     html.H2("NTF In-silico Sectioning", className="mt-2 mb-3 text-center"),
     
     dbc.Row([
-        # ================= 左侧面板 =================
+        # ================= Left panel =================
         dbc.Col([
             dbc.Card([
                 dbc.CardHeader("3D Tissue Model & Plane Preview", className="font-weight-bold"),
@@ -120,7 +121,7 @@ app.layout = dbc.Container([
             ], className="mb-2 shadow-sm"),
         ], width=6),
         
-        # ================= 右侧面板 =================
+        # ================= Right panel =================
         dbc.Col([
             dbc.Card([
                 dbc.CardHeader(
@@ -162,7 +163,7 @@ app.layout = dbc.Container([
                             dbc.Button("Predict", id="btn-generate", color="primary", size="sm", className="w-100"),
                         ], width=3),
                         
-                        # 动态显示基因或分类下拉框
+                        # Dynamic gene or categorical dropdown
                         dbc.Col([
                             html.Label("Select Target", className="small mb-1"),
                             html.Div(
@@ -195,9 +196,9 @@ app.layout = dbc.Container([
 ], fluid=True, className="px-4 py-2")
 
 
-# --- 4. 回调函数 ---
+# --- 4. Callbacks ---
 
-# 切换下拉菜单的显示/隐藏
+# Toggle visibility of gene/categorical dropdowns
 @app.callback(
     [Output('div-gene-dropdown', 'style'),
      Output('div-cat-dropdown', 'style')],
@@ -254,7 +255,7 @@ def generate_slice_and_predict(n_clicks, nx, ny, nz, px, py, pz, n_spots):
     normal = np.array([nx, ny, nz])
     point = np.array([px, py, pz])
     
-    # 宽泛采样
+    # Broad spatial sampling on the plane
     sampled_3d, sampled_uv = sample_points_on_plane(point, normal, n_spots, bbox_min, bbox_max)
     if len(sampled_3d) == 0:
         return None, "⚠️ No points found inside the bounding box for this plane."
@@ -262,16 +263,14 @@ def generate_slice_and_predict(n_clicks, nx, ny, nz, px, py, pz, n_spots):
     scaled_coords = sampled_3d * spatial_scaling
     coords_tensor = torch.from_numpy(scaled_coords).float().to(device)
     
-    # 1. 模型预测表达
+    # 1. Model prediction
     with torch.no_grad():
         prediction_results = sample_points(model, coords_tensor)
         predicted_expression = prediction_results["expression"].cpu().numpy()
     
-    # ================= 优化2：基于表达量自适应剔除背景 =================
-    # 计算每个点的总基因表达量
+    # Expression-based background removal:
+    # Retain only points with total expression above 5% of the maximum
     total_expr_per_spot = predicted_expression.sum(axis=1)
-    
-    # 设定阈值：保留总表达量大于最高点 5% 的点
     threshold = np.max(total_expr_per_spot) * 0.05
     keep_mask = total_expr_per_spot > threshold
     
@@ -282,60 +281,37 @@ def generate_slice_and_predict(n_clicks, nx, ny, nz, px, py, pz, n_spots):
     if len(sampled_3d) == 0:
         return None, "⚠️ All sampled points had near-zero expression (outside tissue). Try moving the plane."
         
-    # 如果过滤后剩下的点仍然过多，随机下采样到目标数量
+    # Randomly downsample if too many points remain after filtering
     if len(sampled_3d) > n_spots:
         idx = np.random.choice(len(sampled_3d), n_spots, replace=False)
         sampled_3d = sampled_3d[idx]
         sampled_uv = sampled_uv[idx]
         predicted_expression = predicted_expression[idx]
-    # ===================================================================
 
-    # # ================= 优化1：基因维度的标准化(Min-Max) =================
-    # # 按列(基因)求最大最小值
-    # min_vals = predicted_expression.min(axis=0)
-    # max_vals = predicted_expression.max(axis=0)
-    # range_vals = max_vals - min_vals
-    # range_vals[range_vals == 0] = 1.0  # 防止除以 0
-    
-    # # 标准化：将每个基因的表达映射到 0 ~ 1 之间
-    # normalized_expression = (predicted_expression - min_vals) / range_vals
-    # # ===================================================================
-
-    # ================= 优化1：0.1-1.0 非零映射标准化 =================
-    # 设定极小值阈值，判定什么是"零"
+    # Per-gene normalization: map non-zero values to 0.1–1.0, keep zeros as 0
     eps = 1e-6
     is_nonzero = predicted_expression > eps
     
-    # 找到非零的最小值
     masked_expr = np.where(is_nonzero, predicted_expression, np.inf)
     min_vals_nonzero = masked_expr.min(axis=0)
-    min_vals_nonzero[np.isinf(min_vals_nonzero)] = 0.0  # 处理全零基因
+    min_vals_nonzero[np.isinf(min_vals_nonzero)] = 0.0
     
-    # 找到最大值并计算极差
     max_vals = predicted_expression.max(axis=0)
     range_vals = max_vals - min_vals_nonzero
-    range_vals[range_vals <= 0] = 1.0  # 防止除以 0
+    range_vals[range_vals <= 0] = 1.0
     
-    # 初始化一个全 0 矩阵
     normalized_expression = np.zeros_like(predicted_expression)
-    
-    # 对所有点进行 0.1 ~ 1.0 的映射计算
-    # 公式: 0.1 + 0.9 * (x - min) / (max - min)
     scaled_expr = 0.1 + 0.9 * ((predicted_expression - min_vals_nonzero) / range_vals)
-    
-    # 仅将原本非零的点替换为映射后的值，原本为0的点依���保持为0
     normalized_expression[is_nonzero] = scaled_expr[is_nonzero]
-    
-    # 兜底截断，确保数值绝对安全
     normalized_expression = np.clip(normalized_expression, 0.0, 1.0)
-    # ===================================================================
 
-    # 2. KNN 投票预测定性变量 (仅对过滤后保留的实体组织点计算)
+    # 2. KNN voting for categorical variables (only on retained tissue points)
     pred_obs = {}
     if obs_categories:
         k_neighbors = min(5, len(raw_coords))
         _, indices = kdtree.query(sampled_3d, k=k_neighbors)
-        if k_neighbors == 1: indices = indices.reshape(-1, 1)
+        if k_neighbors == 1:
+            indices = indices.reshape(-1, 1)
         
         for key, info in obs_categories.items():
             codes = info['codes']
@@ -352,7 +328,7 @@ def generate_slice_and_predict(n_clicks, nx, ny, nz, px, py, pz, n_spots):
     data_dict = {
         'x_2d': sampled_uv[:, 0].tolist(), 'y_2d': sampled_uv[:, 1].tolist(),
         'x_3d': sampled_3d[:, 0].tolist(), 'y_3d': sampled_3d[:, 1].tolist(), 'z_3d': sampled_3d[:, 2].tolist(),
-        'expression': normalized_expression.tolist(), # 发送给前端的是标准化后的平滑数据
+        'expression': normalized_expression.tolist(),
         'pred_obs': pred_obs  
     }
     return data_dict, f"✅ Inference complete! Retained {len(sampled_3d)} confident tissue spots."
@@ -380,7 +356,6 @@ def update_2d_plot(view_mode, selected_gene, selected_cat, data):
         )
     elif view_mode == 'cat' and selected_cat and selected_cat in data.get('pred_obs', {}):
         cat_labels = data['pred_obs'][selected_cat]
-        # 使用大量离散颜色的拼接，以防类别太多
         rich_palette = px.colors.qualitative.Alphabet + px.colors.qualitative.Dark24 + px.colors.qualitative.Light24
         
         fig = px.scatter(
@@ -396,7 +371,6 @@ def update_2d_plot(view_mode, selected_gene, selected_cat, data):
         margin=dict(l=0, r=0, b=0, t=40),
         legend_title_text=''
     )
-    # 把散点稍微调大一点，方便看清颜色
     fig.update_traces(marker=dict(size=6))
     return fig
 
@@ -411,14 +385,12 @@ def download_anndata(n_clicks, data):
     if not data:
         return dash.no_update
         
-    # 下载的也是标准化后的表达矩阵，方便下游统一作图
     expr_matrix = np.array(data['expression'])
     coords_3d = np.column_stack((data['x_3d'], data['y_3d'], data['z_3d']))
     coords_2d = np.column_stack((data['x_2d'], data['y_2d']))
     
     obs_df = pd.DataFrame(index=[f"spot_{i}" for i in range(len(coords_3d))])
     
-    # 填入预测的分类变量
     if 'pred_obs' in data:
         for key, labels in data['pred_obs'].items():
             obs_df[key] = labels
