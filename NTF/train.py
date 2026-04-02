@@ -75,6 +75,7 @@ def train(
     # Wrap main loop with tqdm and set a description
     pbar = tqdm(range(1, args.n_iter + 1), desc="Training NeuralTranscriptomicField")
 
+    train_start_time = time.time()
     for i in pbar:
         batch = dataset.get_batch(args.batch_size, args.device)
         
@@ -134,8 +135,9 @@ def train(
         # Scheduler Step
         scheduler.step()
 
+    train_elapsed = time.time() - train_start_time
     pbar.close() # close progress bar
     writer.close() # close TensorBoard writer
-    logging.info("Training finished.")
+    logging.info(f"Training finished. Time elapsed: {train_elapsed:.2f} seconds ({train_elapsed/60:.2f} minutes).")
     
     return model

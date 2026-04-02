@@ -93,6 +93,20 @@ The model expects an `AnnData` object with:
 - `adata.obsm['spatial']`: 3D spatial coordinates (cells × 3)
 - `adata.obs[slice_id]`: Section/slice identifier column
 
+## Scripts
+
+The `scripts/` directory provides ready-to-use command-line tools built on top of the NTF library:
+
+| Script | Description |
+|---|---|
+| `train_and_eval.py` | Train an NTF model and evaluate reconstruction quality on a held-out test set. Supports both random and label-based train/test splitting. |
+| `generate_hires_convex.py` | Train a model and generate a high-resolution point cloud by sampling new coordinates inside the convex hull of the original tissue. |
+| `generate_hires_distfield.py` | Train a model and generate a high-resolution point cloud by sampling within a KD-Tree distance-field boundary, suitable for non-convex tissue shapes. |
+| `sectioning_data_prepare.py` | Train a model and pre-compute all assets (mesh, metadata) required by the interactive sectioning app. |
+| `sectioning_app.py` | Interactive Dash web app for in-silico virtual sectioning: define a cutting plane, run inference, and visualise gene expression or cell-type annotations on the 2D slice. |
+
+See [`scripts/README.md`](scripts/README.md) for detailed usage instructions and argument descriptions.
+
 ## License
 
 See [LICENSE](LICENSE) for details.
