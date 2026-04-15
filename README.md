@@ -43,11 +43,14 @@ See `requirements.txt` for the full list of dependencies. Key dependencies:
 
 ```python
 import anndata
+import numpy as np
+import torch
 from NTF import train, sample_points
 from NTF.config import add_shared_args, process_args
 
 # Load your spatial transcriptomics data (AnnData format)
 adata = anndata.read_h5ad("your_data.h5ad")
+adata.obsm['spatial'] = adata.obsm['spatial'].astype(np.float32)
 
 # Parse and process arguments
 parser = add_shared_args()
@@ -58,13 +61,18 @@ args = parser.parse_args([
 ])
 args = process_args(args)
 
+# Compute spatial scaling factor (normalises coordinates to [0, 1] range)
+raw_bbox_size = (adata.obsm['spatial'].max(0) - adata.obsm['spatial'].min(0)).max()
+spatial_scaling = 1.0 / raw_bbox_size if raw_bbox_size > 0 else 1.0
+adata.obsm['spatial'] *= spatial_scaling
+
 # Train the model
 model = train(adata, args)
 
-# Sample gene expression at 3D coordinates
-import torch
-xyz = torch.tensor([[x, y, z], ...], dtype=torch.float32)
-output = sample_points(model, xyz)
+# Sample gene expression at new 3D coordinates (apply the same scaling)
+xyz_raw = np.array([[x, y, z], ...], dtype=np.float32)
+xyz_scaled = torch.from_numpy(xyz_raw * spatial_scaling).to(args.device)
+output = sample_points(model.inr, xyz_scaled)
 expression = output["expression"]  # shape: [N, n_genes]
 ```
 
@@ -104,8 +112,21 @@ The `scripts/` directory provides ready-to-use command-line tools built on top o
 | `generate_hires_distfield.py` | Train a model and generate a high-resolution point cloud by sampling within a KD-Tree distance-field boundary, suitable for non-convex tissue shapes. |
 | `sectioning_data_prepare.py` | Train a model and pre-compute all assets (mesh, metadata) required by the interactive sectioning app. |
 | `sectioning_app.py` | Interactive Dash web app for in-silico virtual sectioning: define a cutting plane, run inference, and visualise gene expression or cell-type annotations on the 2D slice. |
+| `3D_visulization.py` | Interactive Dash web app for exploring `.h5ad` data in 3D: visualise categorical variables or multi-gene expression with filtering and adaptive opacity controls. |
 
 See [`scripts/README.md`](scripts/README.md) for detailed usage instructions and argument descriptions.
+
+## Analysis
+
+The `analysis/` directory provides supplementary scripts for reproducing simulation experiments described in the paper:
+
+| Script | Description |
+|---|---|
+| `simulate_data.py` | Generate synthetic 3D spatial transcriptomics datasets of varying scale for benchmarking. |
+| `simu_sparse_interval.py` | Evaluate NTF reconstruction across different slice-sampling intervals (sparse slice input experiment). |
+| `simu_mixed_resolution.py` | Evaluate NTF reconstruction with mixed high/low-resolution slice inputs. |
+
+See [`analysis/README.md`](analysis/README.md) for detailed usage instructions.
 
 ## License
 

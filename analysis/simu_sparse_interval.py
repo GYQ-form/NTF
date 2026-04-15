@@ -7,7 +7,7 @@ import anndata
 import torch
 import matplotlib.pyplot as plt
 from simu_expr_on_domain import simulate_gene_expression, assign_slices
-# 假设你之前的训练代码封装在 train_utils 或者直接引用
+# Assumes NTF training is accessible via NTF.train
 from NTF.train import train 
 from NTF.sample import sample_points
 from sklearn.metrics import mean_squared_error
@@ -25,17 +25,16 @@ from tqdm import tqdm
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
 def get_args():
-    # 1. 获取共享的父解析器
+    # 1. Build shared parent parser
     shared_parser = add_shared_args()
     
-    # 2. 创建主解析器，并继承共享参数
-    # parents参数接受一个列表，这就是为什么叫“继承”
+    # 2. Build main parser, inheriting shared arguments
     parser = argparse.ArgumentParser(
         description="Train model and generate high-resolution data.",
         parents=[shared_parser] 
     )
     
-    # 3. 添加本脚本特有的参数
+    # 3. Add script-specific arguments
     task_group = parser.add_argument_group('Task Specific: Simulation on slice intervals')
     task_group.add_argument('--is_simulate', action='store_true', help='The input data is already simulated data')
     task_group.add_argument('--domain_key', type=str, default='domain')
@@ -43,10 +42,10 @@ def get_args():
     task_group.add_argument('--total_slices', type=int, default=100)
     task_group.add_argument('--intervals', type=int, nargs='+', default=[2, 3, 4, 5, 6, 7, 8, 9, 10], help='Intervals k to test (e.g., 1 means use all, 2 means use every 2nd)')
     
-    # 4. 解析参数
+    # 4. Parse arguments
     args = parser.parse_args()
     
-    # 5. 后处理
+    # 5. Post-process arguments
     args = process_args(args)
     
     return args
@@ -74,25 +73,25 @@ def main():
         logging.info("Input data is already simulated. Skipping simulation step.")
         sim_adata = anndata.read_h5ad(args.input_data)
     else:
-        # 1. 加载模板并生成 Ground Truth
+        # 1. Load template and generate ground truth
         logging.info("Generating Ground Truth Simulation Data...")
         template_adata = anndata.read_h5ad(args.input_data)
 
-        # 生成表达量
+        # Simulate gene expression
         sim_adata = simulate_gene_expression(
             template_adata, 
             domain_key=args.domain_key, 
             n_genes=args.n_genes,
         )
         
-        # 分配 100 张切片ID
+        # Assign slice IDs
         sim_adata = assign_slices(sim_adata, n_slices=args.total_slices)
         
-        # 标准化到每个细胞10,000个counts
+        # Normalise to 10,000 counts per cell
         sc.pp.normalize_total(sim_adata, target_sum=1e4)
-        # Log1p变换
+        # Log1p transform
         sc.pp.log1p(sim_adata)
-        # 保存 Ground Truth 以备查
+        # Save ground truth for reference
         sim_adata.write_h5ad(os.path.join(args.output_dir, "ground_truth_full.h5ad"),compression='gzip')
 
     # calculate spatial scaling factor
@@ -103,19 +102,17 @@ def main():
     results = []
     log_lines = []
 
-    # 2. 循环实验：不同的间隔 k
+    # 2. Experiment loop over slice intervals
     for k in args.intervals:
         logging.info(f"=== Starting Experiment with Interval k={k} ===")
         
-        # 2.1 下采样逻辑
-        # 假设 slice_id 是 '0', '1', ..., '99'
-        # 我们选择 int(slice_id) % k == 0 的切片
+        # 2.1 Subsample slices at interval k
         all_slice_ids = np.arange(args.total_slices)
-        selected_slices = all_slice_ids[::k] # 每隔 k 取一张
+        selected_slices = all_slice_ids[::k]  # keep every k-th slice
         selected_slices_str = selected_slices.astype(str)
         
         subset_adata = sim_adata[sim_adata.obs['slice_id'].isin(selected_slices_str)].copy()
-        subset_adata.obsm['spatial'] *= spatial_scaling  # 应用缩放
+        subset_adata.obsm['spatial'] *= spatial_scaling  # apply scaling
         n_train_cells = subset_adata.shape[0]
         n_selected_slices = len(selected_slices)
         
@@ -125,17 +122,12 @@ def main():
             logging.warning("Too few cells, skipping...")
             continue
 
-        # 2.2 训练模型 (使用部分切片)
-        # 注意：train 函数内部通常会根据 bounding_box 构建坐标系
-        # 这里必须确保 subset_adata 的 bounding_box 足够覆盖全图，或者手动指定 bbox
-        # NTF 代码通常会根据输入数据自动计算 bbox，所以只要保留了最顶和最底的切片(如果可能)最好
-        # 如果 k=10, 0, 10, ... 90。范围稍微变小一点点，通常问题不大。
+        # 2.2 Train model on the selected subset of slices
         
         model_wrapper = train(subset_adata, args)
         trained_inr = model_wrapper.inr
         
-        # 2.3 在 FULL Ground Truth 上评估重构
-        # 我们用模型预测所有 100 张切片上的点，并与真实值对比
+        # 2.3 Evaluate reconstruction on the full ground truth
         rec_adata =  get_reconstruction(trained_inr, sim_adata, spatial_scaling, args.device)
         
         logging.info(f"--- Evaluation on k={k} ---")
@@ -174,7 +166,7 @@ def main():
             'avg_ssim_3d': avg_ssim3d
         })
         
-        # 清理显存
+        # Free GPU memory
         del model_wrapper
         del trained_inr
         torch.cuda.empty_cache()
@@ -182,7 +174,7 @@ def main():
     with open(f'{args.output_dir}/res.log', 'w') as f:
         f.writelines(log_lines)
 
-    # 3. 保存结果
+    # 3. Save results
     df_res = pd.DataFrame(results)
     df_res.to_csv(os.path.join(args.output_dir, 'interval_study_results.csv'), index=False)
     logging.info("Experiment finished.")
