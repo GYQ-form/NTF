@@ -2,7 +2,6 @@ import anndata
 import scipy.sparse as sp
 import numpy as np
 import scanpy as sc
-import warnings
 from skimage.metrics import structural_similarity as ssim
 
 def normalize_adata(adata: anndata.AnnData, layer: str = None):
@@ -66,13 +65,20 @@ def normalize_adata(adata: anndata.AnnData, layer: str = None):
         
         # Find the maximum per gene and compute the range
         max_vals = matrix.max(axis=0)
+        
+        # 先记录下哪些基因的 max 和 min 是相等的
         range_vals = max_vals - min_vals_nonzero
-        range_vals[range_vals <= 0] = 1.0  # Avoid division by zero
+        is_identical_expr = range_vals <= 0
+        
+        range_vals[is_identical_expr] = 1.0  # Avoid division by zero
         
         result_matrix = np.zeros_like(matrix)
         
         # Compute the linear mapping
         scaled_expr = 0.1 + 0.9 * ((matrix - min_vals_nonzero) / range_vals)
+        
+        # 对于 max==min 的基因，将其映射值强制设为 1.0（与 Sparse 逻辑保持一致）
+        scaled_expr[:, is_identical_expr] = 1.0
         
         # Replace only the non-zero positions
         result_matrix[is_nonzero] = scaled_expr[is_nonzero]
@@ -127,31 +133,58 @@ def calculate_spatial_metrics(adata: sc.AnnData, prediction_layer: str = 'predic
     print("RMSE computed for all genes.")
 
     # --- 2. Compute per-gene 3D SSIM ---
-    coords = adata.obsm[spatial_key].astype(int)
+    coords_original = adata.obsm[spatial_key]
+
+    # Scale coordinates to fit within a reasonable range for SSIM computation
+    # Ensures min dimension >= target_min_dim and max dimension <= target_max_dim
+    target_min_dim = 10  # Minimum grid dimension for meaningful SSIM
+    target_max_dim = 64  # Maximum grid dimension to avoid excessive computation time
+    coords_max = coords_original.max(axis=0)
+    coords_min = coords_original.min(axis=0)
+    original_dims = coords_max - coords_min + 1
+    max_dim = original_dims.max()
+    min_dim = original_dims.min()
+
+    # Determine appropriate scaling factor
+    if max_dim > target_max_dim:
+        # Scale down to fit within max target
+        scale_factor = target_max_dim / max_dim
+    elif min_dim < target_min_dim:
+        # Scale up to meet minimum dimension requirement
+        scale_factor = target_min_dim / min_dim
+    else:
+        scale_factor = 1.0
+
+    coords_scaled = (coords_original - coords_min) * scale_factor
+    coords = coords_scaled.astype(int)
     grid_dims = coords.max(axis=0) + 1
-    
+
+    # Re-check and adjust if any dimension became too small due to integer rounding
+    actual_min_dim = grid_dims.min()
+    if actual_min_dim < 3:
+        # Force scale up to ensure at least 3 in minimum dimension
+        scale_factor = 3.0 / min_dim
+        coords_scaled = (coords_original - coords_min) * scale_factor
+        coords = coords_scaled.astype(int)
+        grid_dims = coords.max(axis=0) + 1
+
     # Dynamically determine SSIM window size (must be odd and <= smallest grid dimension)
-    min_dim = min(grid_dims)
-    
+    min_dim = grid_dims.min()
     if min_dim % 2 == 0:
         win_size = min_dim - 1
     else:
         win_size = min_dim
-        
+
+    # Final safety check
     if win_size < 3:
-        warnings.warn(
-            f"The smallest spatial grid dimension is {min_dim}, which is too small for "
-            f"meaningful SSIM computation (minimum 3 required). "
-            f"SSIM will be skipped and set to NaN for all genes.",
-            UserWarning
-        )
-        adata.var['ssim_3d'] = np.nan
-        return
-    
-    print(f"Spatial grid dimensions: {grid_dims}. Using win_size={win_size} for SSIM.")
-    
+        win_size = 3
+
+    print(f"Original spatial dimensions: {original_dims}. "
+          f"Scaled spatial dimensions: {grid_dims} (scale_factor={scale_factor:.3f}). "
+          f"Using win_size={win_size} for SSIM.")
+
     ssim_scores = []
-    
+
     for i, gene_name in enumerate(adata.var_names):
         true_volume = np.zeros(grid_dims)
         pred_volume = np.zeros(grid_dims)
@@ -162,16 +195,16 @@ def calculate_spatial_metrics(adata: sc.AnnData, prediction_layer: str = 'predic
         x_coords, y_coords, z_coords = coords[:, 0], coords[:, 1], coords[:, 2]
         true_volume[x_coords, y_coords, z_coords] = gene_true_expr
         pred_volume[x_coords, y_coords, z_coords] = gene_pred_expr
-        
+
         data_range = max(true_volume.max(), pred_volume.max()) - min(true_volume.min(), pred_volume.min())
-        
+
         if data_range == 0:
             current_ssim = 1.0
         else:
             current_ssim = ssim(true_volume, pred_volume, data_range=data_range, win_size=win_size)
-        
+
         ssim_scores.append(current_ssim)
-        
+
         if (i + 1) % 10 == 0 or (i + 1) == adata.n_vars:
              print(f"SSIM computed for {i + 1}/{adata.n_vars} genes...")
 

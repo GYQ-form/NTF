@@ -16,7 +16,7 @@ import os
 from NTF.sample import sample_points
 
 # --- 1. Load assets ---
-ASSETS_DIR = '/home/gongyuqiao/ur_annotation/NTF/mytrain/data/sectioning/mouse_embryo'
+ASSETS_DIR = '/home/gongyuqiao/ur_annotation/NTF/mytrain/data/sectioning/ABCA2/v2'
 with open(f'{ASSETS_DIR}/metadata.pkl', 'rb') as f:
     meta = pickle.load(f)
 
@@ -414,4 +414,4 @@ def download_anndata(n_clicks, data):
             os.remove(tmp_path)
 
 if __name__ == '__main__':
-    app.run(debug=True, port=8201)
+    app.run(debug=True, port=8501)
