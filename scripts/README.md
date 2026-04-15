@@ -226,3 +226,47 @@ In addition to the core NTF requirements, this script requires:
 - `dash-bootstrap-components`
 - `plotly`
 - `open3d` (required by `sectioning_data_prepare.py` for mesh generation)
+
+---
+
+### `3D_visulization.py`
+
+Interactive **Dash** web application for exploring `.h5ad` spatial transcriptomics data in 3D. Supports both categorical variable visualization and multi-gene expression overlay with advanced rendering options.
+
+#### Task-Specific Arguments
+
+| Argument | Default | Description |
+|---|---|---|
+| `--input_path` / `-i` | **required** | Path to the `.h5ad` input file |
+| `--obs-cols` | `cell_type leiden cluster domain slice_id slice annotation slice_ID data_type` | `adata.obs` columns to expose as categorical visualization options |
+| `--port` | 8060 | Port to serve the application on |
+| `--base-url` | `/` | URL path prefix (useful when running behind a reverse proxy) |
+| `--title` | `3D Spatial Transcriptomics Visualization` | Title displayed in the app header |
+
+#### Example
+
+```bash
+python scripts/3D_visulization.py \
+    -i data.h5ad \
+    --obs-cols cell_type leiden \
+    --port 8060
+```
+
+The app will be available at `http://localhost:8060` by default.
+
+#### Features
+
+- **Categorical view**: color points by any `adata.obs` column (e.g., `cell_type`, `leiden`)
+- **Gene expression view**: visualize up to 5 genes simultaneously with independent color scales
+- Expression filtering: hide zero-expression cells, set a minimum expression threshold, and optionally filter by a reference gene
+- **Adaptive opacity**: expression-proportional transparency for cleaner multi-gene overlays
+- Controls for point size and global opacity
+- Collapsible sidebar; immersive mode hides axis backgrounds
+- Automatic down-sampling to 100 000 cells when the dataset exceeds this threshold
+
+#### Dependencies
+
+In addition to the core NTF requirements, this script requires:
+- `dash`
+- `plotly`
+- `scanpy`

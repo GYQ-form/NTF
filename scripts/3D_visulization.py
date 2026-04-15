@@ -10,24 +10,24 @@ import argparse
 import scipy.sparse as sp
 import matplotlib.pyplot as plt
 
-# --- 参数解析 ---
-parser = argparse.ArgumentParser(description="单数据三维可视化")
-parser.add_argument('--obs-cols', nargs='+', default=['cell_type', 'leiden', 'cluster', 'domain', 'slice_id','slice','annotation','slice_ID','data_type'], help="obs列名")
-parser.add_argument('--port', type=int, default=8060, help="端口")
-parser.add_argument('--base-url', type=str, default='/', help="URL 路径前缀，例如 /app1/")
-parser.add_argument('--title', type=str, default='三维空间转录组可视化', help="展示标题")
-parser.add_argument('-i',"--input_path", type=str, required=True, help="h5ad路径")
+# --- Argument parsing ---
+parser = argparse.ArgumentParser(description="Interactive 3D spatial transcriptomics visualisation")
+parser.add_argument('--obs-cols', nargs='+', default=['cell_type', 'leiden', 'cluster', 'domain', 'slice_id','slice','annotation','slice_ID','data_type'], help="adata.obs column names to expose as categorical options")
+parser.add_argument('--port', type=int, default=8060, help="Port to serve the app on")
+parser.add_argument('--base-url', type=str, default='/', help="URL path prefix, e.g. /app1/")
+parser.add_argument('--title', type=str, default='3D Spatial Transcriptomics Visualization', help="Title displayed in the app")
+parser.add_argument('-i',"--input_path", type=str, required=True, help="Path to the .h5ad input file")
 args = parser.parse_args()
 
-# --- 数据加载逻辑 ---
-print(f"正在加载数据: {args.input_path}")
+# --- Data loading ---
+print(f"Loading data: {args.input_path}")
 adata_orig = sc.read_h5ad(args.input_path)
 
-# 下采样
+# Down-sample large datasets for interactive performance
 SAMPLING_THRESHOLD = 100000
 if adata_orig.n_obs > SAMPLING_THRESHOLD:
     adata = sc.pp.subsample(adata_orig, n_obs=SAMPLING_THRESHOLD, copy=True)
-    print(f"数据量大于 {SAMPLING_THRESHOLD}，已自动下采样。")
+    print(f"Dataset exceeds {SAMPLING_THRESHOLD} cells; automatically down-sampled.")
 else:
     adata = adata_orig
 
@@ -55,56 +55,56 @@ CONTENT_STYLE = {
 app.layout = html.Div([
     dcc.Store(id='sidebar-state', data=True),
 
-    # --- 左侧控制栏 ---
+    # --- Left control panel ---
     html.Div(id="sidebar", style=SIDEBAR_STYLE, children=[
-        html.H4("控制面板", className="display-4"),
+        html.H4("Controls", className="display-4"),
         html.Hr(),
-        html.Button('收起 / 展开', id='toggle-sidebar', n_clicks=0, className="button-primary", style={'width': '100%', 'margin-bottom': '10px'}),
+        html.Button('Hide / Show', id='toggle-sidebar', n_clicks=0, className="button-primary", style={'width': '100%', 'margin-bottom': '10px'}),
         
-        html.Label("显示模式:"),
+        html.Label("View mode:"),
         dcc.Dropdown(
             id='view-selector',
-            options=[{'label': '分类变量', 'value': 'categorical'}, {'label': '基因表达 (支持多选)', 'value': 'gene_expression'}],
+            options=[{'label': 'Categorical', 'value': 'categorical'}, {'label': 'Gene expression (multi-select)', 'value': 'gene_expression'}],
             value='categorical', clearable=False
         ),
         html.Br(),
         
-        html.Label("选择目标 (可多选):"),
+        html.Label("Select target (multi-select supported):"),
         dcc.Dropdown(id='item-selector', clearable=False),
         
-        # 基因表达专用的过滤控制面板
+        # Gene expression filter panel
         html.Div(id='gene-specific-controls', children=[
             html.Br(),
             html.Div(style={'padding': '10px', 'background-color': '#e9ecef', 'border-radius': '5px'}, children=[
-                html.Strong("表达量过滤:"),
+                html.Strong("Expression filter:"),
                 
-                # 过滤参考基因下拉框
-                html.Label("过滤参考基因 (可选):", style={'margin-top': '10px', 'font-size': '13px'}),
-                html.Div("若选择，则下方阈值筛选作用于该基因", style={'font-size': '11px', 'color': '#666', 'margin-bottom': '5px'}),
+                # Reference gene for filtering
+                html.Label("Filter reference gene (optional):", style={'margin-top': '10px', 'font-size': '13px'}),
+                html.Div("If selected, the threshold below applies to this gene", style={'font-size': '11px', 'color': '#666', 'margin-bottom': '5px'}),
                 dcc.Dropdown(
                     id='filter-ref-gene', 
                     options=[{'label': g, 'value': g} for g in gene_list], 
                     value=None, 
-                    placeholder="默认: 按自身表达量过滤", 
+                    placeholder="Default: filter by own expression", 
                     clearable=True
                 ),
                 
-                html.Div("提示：多基因同视时建议勾选隐藏0值", style={'font-size': '11px', 'color': '#666', 'margin-top':'8px'}),
+                html.Div("Tip: when viewing multiple genes, consider hiding zero-expression cells", style={'font-size': '11px', 'color': '#666', 'margin-top':'8px'}),
                 dcc.Checklist(
                     id='filter-zero',
-                    options=[{'label': ' 隐藏表达量为 0 的点', 'value': 'hide_zero'}],
+                    options=[{'label': ' Hide cells with zero expression', 'value': 'hide_zero'}],
                     value=[], 
                     style={'margin-top': '2px', 'margin-bottom': '8px'}
                 ),
-                html.Label("最低表达阈值 (绝对值):"),
+                html.Label("Minimum expression threshold (absolute):"),
                 dcc.Input(id='expr-threshold', type='number', value=0.0, step=0.1, style={'width': '100%'}),
                 
-                # --- 新增：适应性透明度 ---
+                # Adaptive opacity
                 html.Hr(style={'margin-top': '10px', 'margin-bottom': '10px'}),
-                html.Strong("高级视觉渲染:"),
+                html.Strong("Advanced rendering:"),
                 dcc.Checklist(
                     id='adaptive-opacity',
-                    options=[{'label': ' 适应性透明度 (表达量越低越透明)', 'value': 'adaptive'}],
+                    options=[{'label': ' Adaptive opacity (lower expression = more transparent)', 'value': 'adaptive'}],
                     value=[], 
                     style={'margin-top': '5px', 'margin-bottom': '5px'}
                 )
@@ -112,25 +112,25 @@ app.layout = html.Div([
         ], style={'display': 'none'}),
         
         html.Br(),
-        html.Label("点大小 (Size):"),
+        html.Label("Point size:"),
         dcc.Slider(id='size-slider', min=1, max=10, step=0.5, value=3, marks={1:'1', 5:'5', 10:'10'}),
         html.Br(),
 
-        html.Label("全局最高透明度 (Opacity上限):"),
+        html.Label("Global max opacity:"),
         dcc.Slider(id='opacity-slider', min=0.1, max=1, step=0.1, value=1.0, marks={0.1:'0.1', 1:'1'}),
         html.Hr(),
 
-        html.Label("视觉选项:"),
+        html.Label("Visual options:"),
         dcc.Checklist(
             id='visual-options',
             options=[
-                {'label': ' 隐藏坐标轴背景 (沉浸模式)', 'value': 'hide_bg'},
+                {'label': ' Hide axis background (immersive mode)', 'value': 'hide_bg'},
             ],
             value=[]
         )
     ]),
 
-    # --- 右侧内容区 ---
+    # --- Right content area ---
     html.Div(id="page-content", style=CONTENT_STYLE, children=[
         html.H2(args.title, style={'text-align': 'center'}),
         dcc.Loading(
@@ -173,7 +173,7 @@ def update_selector_and_controls(view_mode):
         val = valid_obs_cols[0] if valid_obs_cols else None
         return opts, val, False, {'display': 'none'}   
 
-# 核心绘图逻辑
+# Core plotting logic
 @app.callback(
     Output('spatial-3d-plot', 'figure'),
     [Input('view-selector', 'value'),
@@ -206,14 +206,14 @@ def update_graph(view_mode, selected_item, size, opacity, visual_opts, filter_re
         color_scales = ['Reds', 'Blues', 'Greens', 'Purples', 'Oranges']
         traces = []
         
-        # 提前提取参考基因的表达量
+        # Pre-fetch reference gene expression for filtering
         ref_expr = None
         if filter_ref_gene and filter_ref_gene in adata.var_names:
             ref_data = adata[:, filter_ref_gene].X
             ref_expr = ref_data.toarray().flatten() if sp.issparse(ref_data) else np.asarray(ref_data).flatten()
         
         for i, gene in enumerate(genes):
-            # 目标基因表达量
+            # Target gene expression
             expr_data = adata[:, gene].X
             expr = expr_data.toarray().flatten() if sp.issparse(expr_data) else np.asarray(expr_data).flatten()
             
@@ -232,32 +232,32 @@ def update_graph(view_mode, selected_item, size, opacity, visual_opts, filter_re
             cscale = 'Viridis' if len(genes) == 1 else color_scales[i % len(color_scales)]
             cbar_x = 1.0 if len(genes) == 1 else (1.02 + (i * 0.08))
 
-            # ================= 适应性透明度修复逻辑 =================
+            # Adaptive opacity rendering
             if adaptive_opacity and 'adaptive' in adaptive_opacity:
                 e_min = expr_filtered.min()
                 e_max = expr_filtered.max()
                 
-                # 计算 0~1 的标准化表达量
+                # Normalise expression to [0, 1]
                 if e_max > e_min:
                     norm_expr = (expr_filtered - e_min) / (e_max - e_min)
                 else:
                     norm_expr = np.ones_like(expr_filtered)
                 
-                # 动态 Alpha 通道
+                # Dynamic alpha channel
                 dynamic_alpha = norm_expr * opacity
                 
-                # 使用 matplotlib 获取色谱的 RGB 矩阵
+                # Get RGB values from the chosen colormap
                 cmap_name = cscale.lower() if cscale == 'Viridis' else cscale
                 cmap = plt.get_cmap(cmap_name)
                 rgba_matrix = cmap(norm_expr)
                 
-                # 将算好的动态 Alpha 强行注入第四通道
+                # Inject the dynamic alpha into the fourth channel
                 rgba_matrix[:, 3] = dynamic_alpha
                 
-                # 转换为 Plotly 认识的 rgba(r,g,b,a) 字符串数组
+                # Convert to Plotly-compatible rgba() strings
                 color_array = [f'rgba({int(r*255)},{int(g*255)},{int(b*255)},{a:.3f})' for r,g,b,a in rgba_matrix]
                 
-                # 1. 真实的三维散点 (使用 rgba 数组，它自带颜色和透明度)
+                # 1. Real 3D scatter trace (colour and opacity encoded in rgba strings)
                 traces.append(go.Scatter3d(
                     x=df_filtered['x'], y=df_filtered['y'], z=df_filtered['z'],
                     mode='markers', name=gene, 
@@ -265,13 +265,13 @@ def update_graph(view_mode, selected_item, size, opacity, visual_opts, filter_re
                     hovertext=[f'{gene}: {v:.3f}' for v in expr_filtered], hoverinfo='text'
                 ))
                 
-                # 2. 隐藏的 Dummy 轨迹 (唯一作用是为了在侧边挂载 Colorbar)
+                # 2. Hidden dummy trace solely for attaching the colorbar
                 traces.append(go.Scatter3d(
                     x=[None], y=[None], z=[None],
                     mode='markers', showlegend=False, hoverinfo='none',
                     marker=dict(
                         size=0, 
-                        color=[expr.min(), expr.max()], # 提供真实的全局极值以便刻度正确
+                        color=[expr.min(), expr.max()],  # global range for correct tick labels
                         colorscale=cscale,
                         colorbar=dict(title=gene, x=cbar_x, thickness=12, len=0.7),
                         showscale=True
@@ -279,7 +279,7 @@ def update_graph(view_mode, selected_item, size, opacity, visual_opts, filter_re
                 ))
                 
             else:
-                # ================= 原有的统��透明度逻辑 =================
+                # Standard uniform opacity rendering
                 traces.append(go.Scatter3d(
                     x=df_filtered['x'], y=df_filtered['y'], z=df_filtered['z'],
                     mode='markers',
@@ -294,28 +294,27 @@ def update_graph(view_mode, selected_item, size, opacity, visual_opts, filter_re
                 ))
 
         if not traces:
-            return go.Figure(layout={'title': "在当前过滤条件下无数据点"})
+            return go.Figure(layout={'title': "No data points match the current filter settings"})
             
         fig = go.Figure(data=traces)
         
-        # 动态标题
+        # Dynamic title
         title_suffix = []
-        if 'hide_zero' in filter_zero: title_suffix.append("隐藏0值")
-        if expr_threshold is not None and expr_threshold > 0: title_suffix.append(f"阈值 ≥ {expr_threshold}")
-        if adaptive_opacity and 'adaptive' in adaptive_opacity: title_suffix.append("自适应透明")
+        if 'hide_zero' in filter_zero: title_suffix.append("zeros hidden")
+        if expr_threshold is not None and expr_threshold > 0: title_suffix.append(f"threshold >= {expr_threshold}")
+        if adaptive_opacity and 'adaptive' in adaptive_opacity: title_suffix.append("adaptive opacity")
         
-        filter_target_name = filter_ref_gene if filter_ref_gene else "自身"
+        filter_target_name = filter_ref_gene if filter_ref_gene else "self"
         genes_str = ", ".join(genes)
         
         if title_suffix:
-            title = f"基因: {genes_str} (按 {filter_target_name} 过滤: {', '.join(title_suffix)})"
+            title = f"Gene: {genes_str} (filtered by {filter_target_name}: {', '.join(title_suffix)})"
         else:
-            title = f"基因: {genes_str}"
+            title = f"Gene: {genes_str}"
             
-        if len(selected_item) > 5: title += " | 最多显示前5个"
+        if len(selected_item) > 5: title += " | Showing first 5 only"
     
     else:
-        # 分类变量部分保持不变...
         cat_item = selected_item[0] if isinstance(selected_item, list) else selected_item
         plot_data = df.copy()
         plot_data[cat_item] = plot_data[cat_item].astype(str)
@@ -325,7 +324,7 @@ def update_graph(view_mode, selected_item, size, opacity, visual_opts, filter_re
                             color_discrete_sequence=rich_palette,
                             category_orders={cat_item: sorted(plot_data[cat_item].unique())})
         fig.update_traces(marker=dict(size=size, opacity=opacity))
-        title = f"分类: {cat_item}"
+        title = f"Categorical: {cat_item}"
 
     fig.update_layout(
         title=title, scene=scene_settings, 
