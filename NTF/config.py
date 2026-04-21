@@ -23,7 +23,7 @@ def add_shared_args(description="NTF Model Training"):
     io_group.add_argument('--input_data','-i', type=str, required=True, help='Path to your .h5ad file. If not provided, mock data will be used.')
     io_group.add_argument('--output_dir', '-o', type=str, required=True, help='Directory to save results. If None, auto-generated.')
     io_group.add_argument('--log_dir', type=str, default='runs', help='Directory for TensorBoard logs.')
-    io_group.add_argument('--slice_id', type=str, default='brain_section_label', help='Column in adata.obs indicating slice IDs.')
+    io_group.add_argument('--slice_id', type=str, required=True, help='Column in adata.obs indicating slice IDs.')
     
     # ==========================================
     #           2. Training Parameters

@@ -4,6 +4,8 @@ import anndata
 from scipy.stats import nbinom
 from typing import Literal, Dict, Optional, List
 
+# Mouse brain data used to generate the simulated data can be found at Zenodo: https://doi.org/10.5281/zenodo.19590994
+
 def simulate_gene_expression(
     adata: anndata.AnnData,
     domain_key: str,

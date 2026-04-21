@@ -17,16 +17,16 @@ The NTF model consists of the following key components:
 
 ## Installation
 
-```bash
-pip install -e .
-```
-
-For GPU acceleration with [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn):
+Install [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn):
 ```bash
 pip install git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch
 ```
 
-If `tinycudann` is not available, NTF will automatically fall back to a pure PyTorch implementation.
+Then install NTF:
+
+```bash
+pip install -e .
+```
 
 ## Requirements
 
@@ -76,23 +76,19 @@ output = sample_points(model.inr, xyz_scaled)
 expression = output["expression"]  # shape: [N, n_genes]
 ```
 
-### Command-line Arguments
+### Frequently Used Command-line Arguments
 
 | Argument | Default | Description |
 |---|---|---|
 | `--input_data` / `-i` | required | Path to `.h5ad` input file |
 | `--output_dir` / `-o` | required | Directory to save results |
-| `--slice_id` | `brain_section_label` | `adata.obs` column for slice IDs |
+| `--slice_id` | required | `adata.obs` column for slice IDs |
 | `--n_iter` | 20000 | Total training iterations |
 | `--batch_size` | 8192 | Batch size |
 | `--learning_rate` | 1e-4 | Learning rate |
 | `--width` | 64 | MLP layer width |
 | `--depth` | 1 | MLP depth |
-| `--n_levels` | 12 | Number of hash grid levels |
-| `--n_features_per_level` | 2 | Features per hash grid level |
-| `--no_dropout` | False | Disable dropout prediction network |
-| `--weight_expr` | 0.1 | Expression smoothness regularization weight |
-| `--single_precision` | False | Use fp32 instead of mixed precision |
+| `--no_dropout` |  | Disable dropout prediction network (Only used with dense data) |
 
 ## Input Data Format
 
@@ -114,11 +110,11 @@ The `scripts/` directory provides ready-to-use command-line tools built on top o
 | `sectioning_app.py` | Interactive Dash web app for in-silico virtual sectioning: define a cutting plane, run inference, and visualise gene expression or cell-type annotations on the 2D slice. |
 | `3D_visulization.py` | Interactive Dash web app for exploring `.h5ad` data in 3D: visualise categorical variables or multi-gene expression with filtering and adaptive opacity controls. |
 
-See [`scripts/README.md`](scripts/README.md) for detailed usage instructions and argument descriptions.
+See [`scripts`](scripts/) for detailed usage instructions and argument descriptions.
 
 ## Analysis
 
-The `analysis/` directory provides supplementary scripts for reproducing simulation experiments described in the paper:
+Besides `scripts/`, the `analysis/` directory provides supplementary scripts for reproducing simulation experiments described in the paper:
 
 | Script | Description |
 |---|---|
@@ -126,8 +122,6 @@ The `analysis/` directory provides supplementary scripts for reproducing simulat
 | `simu_sparse_interval.py` | Evaluate NTF reconstruction across different slice-sampling intervals (sparse slice input experiment). |
 | `simu_mixed_resolution.py` | Evaluate NTF reconstruction with mixed high/low-resolution slice inputs. |
 
-See [`analysis/README.md`](analysis/README.md) for detailed usage instructions.
+See [`analysis`](analysis/) for detailed usage instructions.
 
-## License
 
-See [LICENSE](LICENSE) for details.

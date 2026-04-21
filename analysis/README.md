@@ -1,6 +1,6 @@
 # NTF Analysis Scripts
 
-This directory contains supplementary analysis scripts for reproducing the paper's results. These scripts cover two main use cases: **simulated data generation** and **reconstruction experiments** on sparse-slice input and mixed-resolution 3D data.
+This directory contains supplementary analysis scripts for reproducing the paper's results. These scripts cover two main use cases: **simulated data generation** and **reconstruction experiments** on sparse-slice input and mixed-resolution (including low-resolution) 3D data.
 
 ---
 
@@ -149,7 +149,7 @@ For each `(m, bin_factor)` combination:
 
 Provides two functions used internally by `simu_sparse_interval.py`:
 
-- **`simulate_gene_expression(adata, domain_key, ...)`** – Generates spatially-patterned gene expression using Negative Binomial or Poisson sampling. Each gene is independently active in a random subset of domains, with a randomly selected spatial pattern (linear gradients, radial, constant).
+- **`simulate_gene_expression(adata, domain_key, ...)`** – Generates spatially-patterned gene expression using Negative Binomial or Poisson sampling. Each gene is independently active in a random subset of domains, with a randomly selected spatial pattern (linear gradients, radial, constant). Mouse brain data used to generate the simulated data can be found at [Zenodo](https://doi.org/10.5281/zenodo.19590994).
 - **`assign_slices(adata, n_slices, ...)`** – Discretises the Z-axis into `n_slices` equally-spaced bins and adds a `slice_id` column to `adata.obs`.
 
 ### `resolution_utils.py`

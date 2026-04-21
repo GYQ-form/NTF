@@ -15,7 +15,7 @@ All scripts accept the following common arguments (defined in `NTF.config.add_sh
 | `--input_data` / `-i` | **required** | Path to the `.h5ad` input file |
 | `--output_dir` / `-o` | **required** | Directory to save results |
 | `--log_dir` | `runs` | Directory for TensorBoard logs |
-| `--slice_id` | `brain_section_label` | `adata.obs` column containing slice/section IDs |
+| `--slice_id` | **required** | `adata.obs` column containing slice/section IDs |
 
 ### Training
 
