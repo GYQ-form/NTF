@@ -270,3 +270,25 @@ In addition to the core NTF requirements, this script requires:
 - `dash`
 - `plotly`
 - `scanpy`
+
+---
+
+## Optimized Scripts for Large-Scale Generation (10M+ points)
+
+The `optimized/` subdirectory provides memory-efficient versions of the high-resolution generation scripts, designed for generating **tens of millions or more** points under constrained resources.
+
+> **Model training and inference are extremely fast** — even for 100 million points, training takes ~12 minutes and GPU inference takes ~1 minutes. **The dominant cost at this scale is data I/O**: streaming hundreds of gigabytes to disk and assembling sparse matrices for the final `.h5ad` file.
+
+| Script | Sampling method | Best for |
+|---|---|---|
+| [`optimized/generate_hires_convex_optimized.py`](optimized/) | Convex hull (Delaunay) | Roughly convex tissues |
+| [`optimized/generate_hires_distfield_optimized.py`](optimized/) | KD-Tree distance field | Non-convex / complex shapes |
+
+Key differences from the standard scripts:
+
+- **Thread-parallel sampling** (no fork, no memory duplication)
+- **Memory-mapped inference** (`np.memmap`) — predictions stream to disk instead of accumulating in RAM
+- **Chunk-wise CSR writing** via `h5py` with lzf compression — avoids loading the full matrix into memory
+- **int64 indptr** to support nnz > 2 billion
+
+See [`optimized/README.md`](optimized/README.md) for full usage details, arguments, and performance benchmarks.

@@ -66,7 +66,7 @@ def normalize_adata(adata: anndata.AnnData, layer: str = None):
         # Find the maximum per gene and compute the range
         max_vals = matrix.max(axis=0)
         
-        # 先记录下哪些基因的 max 和 min 是相等的
+        # identify genes where max equals min
         range_vals = max_vals - min_vals_nonzero
         is_identical_expr = range_vals <= 0
         
@@ -77,7 +77,7 @@ def normalize_adata(adata: anndata.AnnData, layer: str = None):
         # Compute the linear mapping
         scaled_expr = 0.1 + 0.9 * ((matrix - min_vals_nonzero) / range_vals)
         
-        # 对于 max==min 的基因，将其映射值强制设为 1.0（与 Sparse 逻辑保持一致）
+        # for genes with max==min, force mapped value to 1.0 (consistent with sparse branch)
         scaled_expr[:, is_identical_expr] = 1.0
         
         # Replace only the non-zero positions
