@@ -2,32 +2,6 @@
 
 NTF is a deep learning framework for reconstructing continuous 3D gene expression fields from sparse spatial transcriptomics data. It uses a hash-grid-based implicit neural representation (INR) to model gene expression as a continuous function of 3D coordinates, enabling high-resolution reconstruction across multiple tissue sections.
 
-## Start Here
-
-### End-to-end tutorials
-
-The [`tutorial/`](tutorial/) directory contains two executed Jupyter notebooks with saved metrics and figures. Each notebook includes its input-data download link and runs the complete workflow rather than relying on precomputed model outputs.
-
-| Notebook | What it demonstrates |
-|---|---|
-| [1. Sparse 2D sections to a high-resolution 3D field](tutorial/01_simulation_reconstruction.ipynb) | Build sparse, mixed-resolution input from the mouse-brain simulation, train NTF, reconstruct all 1,975,530 original coordinates, and evaluate the 100-gene reconstruction with 2D and 3D visualizations. |
-| [2. weMERFISH scenarios, quantitative metrics and niche heterogeneity](tutorial/02_wemerfish_scenarios.ipynb) | Train and evaluate five models on real zebrafish-embryo data, covering interleaved-section interpolation, a contiguous middle gap, boundary extrapolation, expression metrics, cell typing, and niche composition. |
-
-The full 20,000-iteration training workflows are configured for a CUDA-capable GPU (`cuda:0` by default). Open the notebooks on GitHub to inspect their executed outputs before deciding whether to rerun them.
-
-### Visual guide to command-line scripts
-
-If you already have an `.h5ad` file, use the diagrams below to choose the right tool. Click any diagram for detailed arguments, examples, and outputs.
-
-| Script workflow | Script workflow |
-|---|---|
-| [![Evaluate reconstruction with train_and_eval.py](figures/train_and_eval.jpg)](scripts/README.md#train_and_evalpy) | [![Fill a convex tissue volume with generate_hires_convex.py](figures/generate_hires_convex.jpg)](scripts/README.md#generate_hires_convexpy) |
-| **Held-out evaluation**: [`train_and_eval.py`](scripts/train_and_eval.py) | **Convex tissue shapes**: [`generate_hires_convex.py`](scripts/generate_hires_convex.py) |
-| [![Fill an irregular tissue volume with generate_hires_distfield.py](figures/generate_hires_distfield.jpg)](scripts/README.md#generate_hires_distfieldpy) | [![Prepare a tissue for virtual sectioning with sectioning_data_prepare.py](figures/sectioning_data_prepare.jpg)](scripts/README.md#sectioning_data_preparepy) |
-| **Non-convex or complex shapes**: [`generate_hires_distfield.py`](scripts/generate_hires_distfield.py) | **Virtual sectioning, step 1**: [`sectioning_data_prepare.py`](scripts/sectioning_data_prepare.py) |
-| [![Cut and export a virtual section with sectioning_app.py](figures/sectioning_app.jpg)](scripts/README.md#sectioning_apppy) | [![Explore cells and genes in 3D with 3D_visulization.py](figures/3D_visulization.jpg)](scripts/README.md#3d_visulizationpy) |
-| **Virtual sectioning, step 2**: [`sectioning_app.py`](scripts/sectioning_app.py) | **Interactive 3D exploration**: [`3D_visulization.py`](scripts/3D_visulization.py) |
-
 ## Model Architecture
 
 ![NTF Model Architecture](https://github.com/user-attachments/assets/99e34cce-9b46-4e1c-b5e0-a0c9c49bdd0b)
@@ -56,6 +30,8 @@ pip install -e .
 ```
 
 ## Requirements
+
+NTF is not tied to a specific operating system; the current release has been tested on Linux. For GPU execution, a CUDA-capable GPU with more than 10 GB of VRAM is sufficient for most applications.
 
 See `requirements.txt` for the full list of dependencies. Key dependencies:
 
@@ -117,18 +93,18 @@ labels = output["labels"]["cell_type"]  # predicted label per query point
 
 ### Frequently Used Command-line Arguments
 
-| Argument                  | Default  | Description                                                                     |
-| ------------------------- | -------- | ------------------------------------------------------------------------------- |
-| `--input_data` / `-i` | required | Path to `.h5ad` input file                                                    |
-| `--output_dir` / `-o` | required | Directory to save results                                                       |
-| `--slice_id`            | required | `adata.obs` column for slice IDs                                              |
-| `--n_iter`              | 20000    | Total training iterations                                                       |
-| `--batch_size`          | 8192     | Batch size                                                                      |
-| `--learning_rate`       | 1e-4     | Learning rate                                                                   |
-| `--width`               | 64       | MLP layer width                                                                 |
-| `--depth`               | 1        | MLP depth                                                                       |
-| `--no_dropout`          |          | Disable dropout prediction network (Only used with dense data)                  |
-| `--cat_keys`            | `[]`   | Categorical `adata.obs` columns (e.g. cell types) to annotate at query points |
+| Argument | Default | Description |
+|---|---|---|
+| `--input_data` / `-i` | required | Path to `.h5ad` input file |
+| `--output_dir` / `-o` | required | Directory to save results |
+| `--slice_id` | required | `adata.obs` column for slice IDs |
+| `--n_iter` | 20000 | Total training iterations |
+| `--batch_size` | 8192 | Batch size |
+| `--learning_rate` | 1e-4 | Learning rate |
+| `--width` | 64 | MLP layer width |
+| `--depth` | 1 | MLP depth |
+| `--no_dropout` |  | Disable dropout prediction network (Only used with dense data) |
+| `--cat_keys` | `[]` | Categorical `adata.obs` columns (e.g. cell types) to annotate at query points |
 
 ## Input Data Format
 
@@ -138,32 +114,30 @@ The model expects an `AnnData` object with:
 - `adata.obsm['spatial']`: 3D spatial coordinates (cells × 3)
 - `adata.obs[slice_id]`: Section/slice identifier column
 
+## Tutorials
+
+The [`tutorial/`](tutorial/) directory contains two executed Jupyter notebooks with saved metrics and figures. Each notebook includes its input-data download link and runs the complete workflow.
+
+| Notebook | What it demonstrates |
+|---|---|
+| [1. Sparse 2D sections to a high-resolution 3D field](tutorial/01_simulation_reconstruction.ipynb) | Build sparse, mixed-resolution input from the mouse-brain simulation, train NTF, reconstruct all 1,975,530 original coordinates, and evaluate the 100-gene reconstruction with 2D and 3D visualizations. |
+| [2. weMERFISH scenarios, quantitative metrics and niche heterogeneity](tutorial/02_wemerfish_scenarios.ipynb) | Train and evaluate five models on real zebrafish-embryo data, covering interleaved-section interpolation, a contiguous middle gap, boundary extrapolation, expression metrics, cell typing, and niche composition. |
+
 ## Scripts
 
-The `scripts/` directory provides ready-to-use command-line tools built on top of the NTF library:
+The `scripts/` directory provides ready-to-use command-line tools built on top of the NTF library. If you already have an `.h5ad` file, use the diagrams below to choose the right tool. Click any diagram for detailed arguments, examples, and outputs.
 
-| Script                          | Description                                                                                                                                                               |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `train_and_eval.py`           | Train an NTF model and evaluate reconstruction quality on a held-out test set. Supports both random and label-based train/test splitting.                                 |
-| `generate_hires_convex.py`    | Train a model and generate a high-resolution point cloud by sampling new coordinates inside the convex hull of the original tissue.                                       |
-| `generate_hires_distfield.py` | Train a model and generate a high-resolution point cloud by sampling within a KD-Tree distance-field boundary, suitable for non-convex tissue shapes.                     |
-| `sectioning_data_prepare.py`  | Train a model and pre-compute all assets (mesh, metadata) required by the interactive sectioning app.                                                                     |
-| `sectioning_app.py`           | Interactive Dash web app for in-silico virtual sectioning: define a cutting plane, run inference, and visualise gene expression or cell-type annotations on the 2D slice. |
-| `3D_visulization.py`          | Interactive Dash web app for exploring `.h5ad` data in 3D: visualise categorical variables or multi-gene expression with filtering and adaptive opacity controls.       |
-
-See [`scripts`](scripts/) for detailed usage instructions and argument descriptions.
-
-## Analysis: paper reproduction scripts
-
-The [`analysis/`](analysis/) directory contains the final NTF-side scripts used to reproduce the paper's experiments and revision analyses. Unlike the general-purpose tools in `scripts/`, these pipelines are organized by dataset and include experiment-specific preprocessing, evaluation, summarization, and figure generation. Each directory's README documents the required inputs and reproduction commands.
-
-| Directory | Reproduction contents |
+| Script workflow | Script workflow |
 |---|---|
-| [`simulation/`](analysis/simulation/) | Simulation generation; scale, sparse-section, mixed-resolution, gene-count, SVG-conservation, UniST-comparison, and model-ablation analyses. |
-| [`STARmap_mouse_VC/`](analysis/STARmap_mouse_VC/) | Reconstruction and cell-typing evaluation, model-component ablation, in-silico query/occupancy-filter validation, and spatial scale-bar checks. |
-| [`deep_starmap_brain/`](analysis/deep_starmap_brain/) | Five-scenario Deep-STARmap benchmark, unified reconstruction/SVG/cell-typing metrics, efficiency summaries, and figures. |
-| [`wemerfish_zebrafish_embryo/`](analysis/wemerfish_zebrafish_embryo/) | Data preparation, cell/niche-typing evaluation, composition summaries, figures, and validation of the complete notebook retraining workflow. |
-| [`cycif_crc1_3d/`](analysis/cycif_crc1_3d/) | CRC1 preprocessing and annotation, MAPS alignment, five-scenario NTF reconstruction, cell/niche and SVG evaluation, baseline-feasibility analysis, and figures. |
-| [`mouse_embryo/`](analysis/mouse_embryo/) | E16.5 cell-type distribution, per-section frequency, 3D morphology comparisons, and summary tables. |
+| [![Evaluate reconstruction with train_and_eval.py](figures/train_and_eval.jpg)](scripts/README.md#train_and_evalpy) | [![Fill a convex tissue volume with generate_hires_convex.py](figures/generate_hires_convex.jpg)](scripts/README.md#generate_hires_convexpy) |
+| **Held-out evaluation**: [`train_and_eval.py`](scripts/train_and_eval.py)<br>Train an NTF model and evaluate reconstruction quality on a held-out test set. Supports both random and label-based train/test splitting. | **Convex tissue shapes**: [`generate_hires_convex.py`](scripts/generate_hires_convex.py)<br>Train a model and generate a high-resolution point cloud by sampling new coordinates inside the convex hull of the original tissue. |
+| [![Fill an irregular tissue volume with generate_hires_distfield.py](figures/generate_hires_distfield.jpg)](scripts/README.md#generate_hires_distfieldpy) | [![Prepare a tissue for virtual sectioning with sectioning_data_prepare.py](figures/sectioning_data_prepare.jpg)](scripts/README.md#sectioning_data_preparepy) |
+| **Non-convex or complex shapes**: [`generate_hires_distfield.py`](scripts/generate_hires_distfield.py)<br>Train a model and generate a high-resolution point cloud by sampling within a KD-Tree distance-field boundary, suitable for non-convex tissue shapes. | **Virtual sectioning, step 1**: [`sectioning_data_prepare.py`](scripts/sectioning_data_prepare.py)<br>Train a model and pre-compute all assets (mesh, metadata) required by the interactive sectioning app. |
+| [![Cut and export a virtual section with sectioning_app.py](figures/sectioning_app.jpg)](scripts/README.md#sectioning_apppy) | [![Explore cells and genes in 3D with 3D_visulization.py](figures/3D_visulization.jpg)](scripts/README.md#3d_visulizationpy) |
+| **Virtual sectioning, step 2**: [`sectioning_app.py`](scripts/sectioning_app.py)<br>Interactive Dash web app for in-silico virtual sectioning: define a cutting plane, run inference, and visualise gene expression or cell-type annotations on the 2D slice. | **Interactive 3D exploration**: [`3D_visulization.py`](scripts/3D_visulization.py)<br>Interactive Dash web app for exploring `.h5ad` data in 3D: visualise categorical variables or multi-gene expression with filtering and adaptive opacity controls. |
 
-Large datasets and generated benchmark outputs are not committed to this directory; follow the data links and paths in the per-dataset READMEs. For a guided introduction, use the [tutorials](#end-to-end-tutorials) above.
+See [`scripts/README.md`](scripts/README.md) for detailed usage instructions and argument descriptions.
+
+## Analysis
+
+The [`analysis/`](analysis/) directory contains scripts for reproducing the experiments and analyses presented in the paper and its revision; see [`analysis/README.md`](analysis/README.md) for details.

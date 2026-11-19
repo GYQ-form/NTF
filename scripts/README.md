@@ -4,7 +4,7 @@ This directory contains command-line scripts built on top of the NTF library. Ev
 
 ## Choose a Script
 
-Use the diagrams to identify the workflow you need. Click a diagram to jump to its arguments, example commands, and outputs. For a guided end-to-end example, start with the [tutorials](../README.md#end-to-end-tutorials).
+Use the diagrams to identify the workflow you need. Click a diagram to jump to its arguments, example commands, and outputs. For a guided end-to-end example, start with the [tutorials](../README.md#tutorials).
 
 | Script workflow | Script workflow |
 |---|---|
