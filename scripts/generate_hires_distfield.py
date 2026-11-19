@@ -6,7 +6,6 @@ import argparse
 import os
 import time
 from scipy.spatial import cKDTree
-from scipy.stats import mode
 import pandas as pd
 import warnings
 
@@ -81,9 +80,6 @@ def get_args():
                             help='Threshold ratio for filtering extremely low-expression points (default 0.03). '
                                  'Points whose total expression is below max_total_expression * this_ratio will be removed.')
     
-    task_group.add_argument('--cat_keys', type=str, nargs='+', default=[], help='Categorical variables for KNN voting.')
-    task_group.add_argument('--k_neighbors', type=int, default=5, help='Number of nearest neighbors for voting.')
-    
     args = parser.parse_args()
     args = process_args(args)
     return args
@@ -123,6 +119,7 @@ def main():
     logging.info(f"Prediction complete. Time elapsed: {infer_time_sec:.2f} seconds.")
 
     predicted_expression = prediction_results["expression"].cpu().numpy()
+    labels = prediction_results.get("labels")
 
     # --- 5. Expression-based background filtering ---
     if args.expr_filter_ratio > 0:
@@ -136,6 +133,8 @@ def main():
         n_before = len(new_raw_coords)
         new_raw_coords = new_raw_coords[keep_mask]
         predicted_expression = predicted_expression[keep_mask]
+        if labels is not None:
+            labels = {key: values[keep_mask] for key, values in labels.items()}
         
         # Keep dropout probability matrix in sync
         if not args.no_dropout and 'dropout_prob' in prediction_results:
@@ -153,31 +152,12 @@ def main():
 
     obs_df = pd.DataFrame(index=[f"new_cell_{i}" for i in range(len(new_raw_coords))])
 
-    # --- 6. KNN-based majority voting for categorical variables ---
-    if args.cat_keys:
-        logging.info(f"Running KNN (k={args.k_neighbors}) majority voting for retained points...")
-        tree = cKDTree(raw_coords)
-        k = min(args.k_neighbors, len(raw_coords))
-        distances, indices = tree.query(new_raw_coords, k=k)
-        
-        if k == 1:
-            indices = indices.reshape(-1, 1)
-
-        for key in args.cat_keys:
-            if key not in adata.obs:
-                continue
-            cat_series = pd.Categorical(adata.obs[key])
-            codes = cat_series.codes        
-            categories = cat_series.categories 
-            
-            neighbor_codes = codes[indices]
-            try:
-                voted_modes, _ = mode(neighbor_codes, axis=1, keepdims=False)
-            except TypeError:
-                voted_modes, _ = mode(neighbor_codes, axis=1)
-                
-            obs_df[key] = categories[voted_modes.flatten()]
-            obs_df[key] = obs_df[key].astype("category")
+    # --- 6. Categorical labels predicted by the model-side KNN annotator ---
+    if labels is not None:
+        annotator = trained_inr.annotator
+        for key, values in labels.items():
+            obs_df[key] = pd.Categorical(values, categories=annotator.categories[key])
+        logging.info(f"Categorical labels assigned by KNN annotator: {list(labels.keys())}")
 
     # --- 7. Build and save AnnData object ---
     adata_hires = anndata.AnnData(X=predicted_expression, obs=obs_df, var=adata.var)

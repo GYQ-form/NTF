@@ -2,6 +2,21 @@
 
 This directory contains command-line scripts built on top of the NTF library. Every script shares a common set of arguments defined in `NTF/config.py` and adds task-specific arguments on top.
 
+## Choose a Script
+
+Use the diagrams to identify the workflow you need. Click a diagram to jump to its arguments, example commands, and outputs. For a guided end-to-end example, start with the [tutorials](../README.md#end-to-end-tutorials).
+
+| Script workflow | Script workflow |
+|---|---|
+| [![Evaluate reconstruction with train_and_eval.py](../figures/train_and_eval.jpg)](#train_and_evalpy) | [![Fill a convex tissue volume with generate_hires_convex.py](../figures/generate_hires_convex.jpg)](#generate_hires_convexpy) |
+| **Held-out evaluation**: [`train_and_eval.py`](train_and_eval.py) | **Convex tissue shapes**: [`generate_hires_convex.py`](generate_hires_convex.py) |
+| [![Fill an irregular tissue volume with generate_hires_distfield.py](../figures/generate_hires_distfield.jpg)](#generate_hires_distfieldpy) | [![Prepare a tissue for virtual sectioning with sectioning_data_prepare.py](../figures/sectioning_data_prepare.jpg)](#sectioning_data_preparepy) |
+| **Non-convex or complex shapes**: [`generate_hires_distfield.py`](generate_hires_distfield.py) | **Virtual sectioning, step 1**: [`sectioning_data_prepare.py`](sectioning_data_prepare.py) |
+| [![Cut and export a virtual section with sectioning_app.py](../figures/sectioning_app.jpg)](#sectioning_apppy) | [![Explore cells and genes in 3D with 3D_visulization.py](../figures/3D_visulization.jpg)](#3d_visulizationpy) |
+| **Virtual sectioning, step 2**: [`sectioning_app.py`](sectioning_app.py) | **Interactive 3D exploration**: [`3D_visulization.py`](3D_visulization.py) |
+
+For tens of millions or more generated points, use the [memory-efficient optimized generation scripts](#optimized-scripts-for-large-scale-generation-10m-points).
+
 ---
 
 ## Shared Arguments

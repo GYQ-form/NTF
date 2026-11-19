@@ -5,8 +5,7 @@ import logging
 import argparse
 import os
 import time
-from scipy.spatial import ConvexHull, Delaunay, cKDTree
-from scipy.stats import mode
+from scipy.spatial import ConvexHull, Delaunay
 import pandas as pd
 import warnings
 import scipy.sparse as sp
@@ -160,11 +159,6 @@ def get_args():
     task_group = parser.add_argument_group('Task Specific: Generation')
     task_group.add_argument('--n_generate', type=int, default=1000000, help='Number of new points to generate.')
 
-    task_group.add_argument('--cat_keys', type=str, nargs='+', default=[],
-                            help='List of categorical variables in adata.obs to predict via KNN voting.')
-    task_group.add_argument('--k_neighbors', type=int, default=5,
-                            help='Number of nearest neighbors for majority voting.')
-
     opt_group = parser.add_argument_group('Optimization Parameters')
     opt_group.add_argument('--n_workers', type=int, default=8,
                           help='Number of parallel threads for candidate generation (default 8).')
@@ -255,6 +249,7 @@ def main():
     t_start = time.time()
     infer_model_sec = 0.0
     infer_io_sec = 0.0
+    label_chunks = {}
 
     with tqdm(total=n_points, desc="Inference", unit="pts", unit_scale=True) as pbar:
         for i in range(0, n_points, args.inference_chunk_size):
@@ -271,6 +266,9 @@ def main():
 
             if has_dropout and "dropout_prob" in batch_results:
                 dropout_mmap[i:end] = batch_results["dropout_prob"].cpu().numpy()
+            if "labels" in batch_results:
+                for key, values in batch_results["labels"].items():
+                    label_chunks.setdefault(key, []).append(values)
             infer_io_sec += time.time() - t_io
 
             pbar.update(end - i)
@@ -286,53 +284,19 @@ def main():
                 f"(model: {infer_model_sec:.1f}s, I/O: {infer_io_sec:.1f}s, "
                 f"{n_points/infer_total_sec:.0f} pts/sec)")
 
+    labels = {key: np.concatenate(chunks) for key, chunks in label_chunks.items()}
+    cat_categories = getattr(getattr(trained_inr, 'annotator', None), 'categories', None)
+
     del trained_NTF, trained_inr, new_coords_tensor
     torch.cuda.empty_cache()
 
-    # --- 5. KNN-based majority voting ---
+    # --- 5. Categorical labels predicted by the model-side KNN annotator ---
     obs_df = pd.DataFrame(index=[f"new_cell_{i}" for i in range(n_points)])
 
-    if args.cat_keys:
-        logging.info(f"Running KNN (k={args.k_neighbors}) majority voting for {n_points:,} points...")
-        tree = cKDTree(raw_coords)
-        k = min(args.k_neighbors, len(raw_coords))
-        knn_chunk_size = 2_000_000
-
-        voted_results = {key: np.zeros(n_points, dtype=np.int32) for key in args.cat_keys}
-
-        with tqdm(total=n_points, desc="KNN voting", unit="pts", unit_scale=True) as pbar:
-            for start_idx in range(0, n_points, knn_chunk_size):
-                end_idx = min(start_idx + knn_chunk_size, n_points)
-                chunk_coords = new_raw_coords[start_idx:end_idx]
-
-                distances, indices = tree.query(chunk_coords, k=k)
-                if k == 1:
-                    indices = indices.reshape(-1, 1)
-
-                for key in args.cat_keys:
-                    if key not in adata.obs:
-                        continue
-                    cat_series = pd.Categorical(adata.obs[key])
-                    codes = cat_series.codes
-                    neighbor_codes = codes[indices]
-
-                    try:
-                        voted_modes, _ = mode(neighbor_codes, axis=1, keepdims=False)
-                    except TypeError:
-                        voted_modes, _ = mode(neighbor_codes, axis=1)
-
-                    voted_results[key][start_idx:end_idx] = voted_modes.flatten()
-
-                pbar.update(end_idx - start_idx)
-
-        for key in args.cat_keys:
-            if key not in adata.obs: continue
-            cat_series = pd.Categorical(adata.obs[key])
-            categories = cat_series.categories
-            obs_df[key] = categories[voted_results[key]]
-            obs_df[key] = obs_df[key].astype("category")
-
-        logging.info(f"KNN categorical voting complete: {args.cat_keys}")
+    if labels:
+        for key, values in labels.items():
+            obs_df[key] = pd.Categorical(values, categories=cat_categories[key])
+        logging.info(f"Categorical labels assigned by KNN annotator: {list(labels.keys())}")
 
     # --- 6. Stream CSR directly to h5ad via h5py (single-pass, resizable datasets) ---
     output_path = os.path.join(args.output_dir, f'{int(args.n_generate/10000)}w_convex_optimized.h5ad')

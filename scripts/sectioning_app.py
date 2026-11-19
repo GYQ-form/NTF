@@ -9,7 +9,6 @@ import torch
 import pandas as pd
 import anndata
 from scipy.spatial import cKDTree
-from scipy.stats import mode
 import tempfile
 import os
 
@@ -267,6 +266,7 @@ def generate_slice_and_predict(n_clicks, nx, ny, nz, px, py, pz, n_spots):
     with torch.no_grad():
         prediction_results = sample_points(model, coords_tensor)
         predicted_expression = prediction_results["expression"].cpu().numpy()
+    labels = prediction_results.get('labels')
     
     # Expression-based background removal:
     # Retain only points with total expression above 5% of the maximum
@@ -277,6 +277,8 @@ def generate_slice_and_predict(n_clicks, nx, ny, nz, px, py, pz, n_spots):
     sampled_3d = sampled_3d[keep_mask]
     sampled_uv = sampled_uv[keep_mask]
     predicted_expression = predicted_expression[keep_mask]
+    if labels is not None:
+        labels = {key: values[keep_mask] for key, values in labels.items()}
     
     if len(sampled_3d) == 0:
         return None, "⚠️ All sampled points had near-zero expression (outside tissue). Try moving the plane."
@@ -287,6 +289,8 @@ def generate_slice_and_predict(n_clicks, nx, ny, nz, px, py, pz, n_spots):
         sampled_3d = sampled_3d[idx]
         sampled_uv = sampled_uv[idx]
         predicted_expression = predicted_expression[idx]
+        if labels is not None:
+            labels = {key: values[idx] for key, values in labels.items()}
 
     # Per-gene normalization: map non-zero values to 0.1–1.0, keep zeros as 0
     eps = 1e-6
@@ -305,25 +309,11 @@ def generate_slice_and_predict(n_clicks, nx, ny, nz, px, py, pz, n_spots):
     normalized_expression[is_nonzero] = scaled_expr[is_nonzero]
     normalized_expression = np.clip(normalized_expression, 0.0, 1.0)
 
-    # 2. KNN voting for categorical variables (only on retained tissue points)
+    # 2. Categorical labels predicted by the model-side KNN annotator
     pred_obs = {}
-    if obs_categories:
-        k_neighbors = min(5, len(raw_coords))
-        _, indices = kdtree.query(sampled_3d, k=k_neighbors)
-        if k_neighbors == 1:
-            indices = indices.reshape(-1, 1)
-        
-        for key, info in obs_categories.items():
-            codes = info['codes']
-            categories = np.array(info['categories'])
-            
-            neighbor_codes = codes[indices]
-            try:
-                voted_modes, _ = mode(neighbor_codes, axis=1, keepdims=False)
-            except TypeError:
-                voted_modes, _ = mode(neighbor_codes, axis=1)
-                
-            pred_obs[key] = categories[voted_modes.flatten()].tolist()
+    if labels is not None:
+        for key, values in labels.items():
+            pred_obs[key] = values.tolist()
     
     data_dict = {
         'x_2d': sampled_uv[:, 0].tolist(), 'y_2d': sampled_uv[:, 1].tolist(),

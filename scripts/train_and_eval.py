@@ -1,6 +1,7 @@
 import torch
 import anndata
 import numpy as np
+import pandas as pd
 import logging
 import argparse
 import os
@@ -50,6 +51,17 @@ def get_args():
     split_group.add_argument(
         '--test_label', type=str, default=None,
         help='Value in --split_column that identifies test cells (required when --split_mode=label).'
+    )
+
+    split_group.add_argument(
+        '--eval_only', action='store_true',
+        help='Skip training and load best_model.pth from --output_dir, then run evaluation only.'
+    )
+    split_group.add_argument(
+        '--fast_eval', action='store_true',
+        help='Use vectorized per-gene metrics (pearson/spearman/rmse) evaluated against '
+             "layers['truth'] when available, and skip the slow per-gene scipy loop, "
+             'dropout classification metrics and SSIM.'
     )
 
     args = parser.parse_args()
@@ -105,7 +117,26 @@ def main():
     adata_train.obsm['spatial'] *= spatial_scaling
 
     # train() automatically logs training time
-    trained_NTF = train(adata_train, args)
+    if args.eval_only:
+        from NTF.models import NeuralTranscriptomicField
+        from NTF.data import SpatialOmicsDataset
+        dataset = SpatialOmicsDataset(adata_train, args.slice_id)
+        trained_NTF = NeuralTranscriptomicField(
+            n_genes=dataset.n_genes, n_slices=dataset.n_slices,
+            resolution=dataset.resolution, bounding_box=dataset.bounding_box,
+            args=args, pos_weight=dataset.nonzero_to_zero_ratio,
+        )
+        ckpt = os.path.join(args.output_dir, 'best_model.pth')
+        trained_NTF.load_state_dict(torch.load(ckpt, map_location=args.device))
+        logging.info(f"eval_only: loaded checkpoint {ckpt}")
+        ann_path = os.path.join(args.output_dir, 'label_annotator.pkl')
+        if args.cat_keys and os.path.exists(ann_path):
+            import pickle
+            with open(ann_path, 'rb') as f:
+                trained_NTF.inr.annotator = pickle.load(f)
+            logging.info(f"eval_only: loaded label annotator from {ann_path}")
+    else:
+        trained_NTF = train(adata_train, args)
     trained_inr = trained_NTF.inr
 
     logging.info("Evaluating on the test set...")
@@ -122,6 +153,48 @@ def main():
     adata_test.layers['prediction'] = predicted_expression
     if args.no_dropout is False:
         adata_test.obsm['dropout_prob'] = prediction_results['dropout_prob'].cpu().numpy() if 'dropout_prob' in prediction_results else None
+
+    # Categorical labels predicted by the model-side KNN annotator (--cat_keys)
+    if 'labels' in prediction_results:
+        annotator_categories = trained_inr.annotator.categories
+        for key, values in prediction_results['labels'].items():
+            adata_test.obs[f'pred_{key}'] = pd.Categorical(values, categories=annotator_categories[key])
+        logging.info(f"KNN annotator labels written to obs: {[f'pred_{k}' for k in prediction_results['labels']]}")
+
+    if args.fast_eval:
+        # Vectorized metrics against the real ground truth when available.
+        eval_target = adata_test.layers['truth'] if 'truth' in adata_test.layers else adata_test.X
+        t = eval_target if isinstance(eval_target, np.ndarray) else eval_target.toarray()
+        t = np.asarray(t, dtype=np.float64)
+        p = np.asarray(predicted_expression, dtype=np.float64)
+        tc = t - t.mean(0); pc = p - p.mean(0)
+        denom = np.sqrt((tc ** 2).sum(0) * (pc ** 2).sum(0))
+        with np.errstate(invalid='ignore', divide='ignore'):
+            pear = (tc * pc).sum(0) / denom
+        rmse = np.sqrt(((t - p) ** 2).mean(0))
+        from scipy.stats import rankdata
+        n_g = adata_test.n_vars
+        spear = np.full(n_g, np.nan)
+        for g0 in range(0, n_g, 500):
+            g1 = min(g0 + 500, n_g)
+            rt = rankdata(t[:, g0:g1], axis=0)
+            rp = rankdata(p[:, g0:g1], axis=0)
+            rtc = rt - rt.mean(0); rpc = rp - rp.mean(0)
+            rdenom = np.sqrt((rtc ** 2).sum(0) * (rpc ** 2).sum(0))
+            with np.errstate(invalid='ignore', divide='ignore'):
+                spear[g0:g1] = (rtc * rpc).sum(0) / rdenom
+        adata_test.var['pearson_corr'] = pear
+        adata_test.var['spearman_corr'] = spear
+        adata_test.var['rmse'] = rmse
+        adata_test.write_h5ad(f'{args.output_dir}/test_results.h5ad', compression='gzip')
+        adata_test.var.to_csv(f'{args.output_dir}/gene_metrics.csv')
+        with open(f'{args.output_dir}/res.log', 'w') as f:
+            f.write(f"Inference time (seconds): {infer_time_sec:.2f}\n")
+            f.write(f"eval_mode: fast_eval vs {'layers/truth' if 'truth' in adata_test.layers else 'X'}\n")
+            f.write(f"Average Pearson correlation across all valid genes: {np.nanmean(pear):.4f}\n")
+            f.write(f"Average Spearman correlation across all valid genes: {np.nanmean(spear):.4f}\n")
+        logging.info(f"fast_eval done. Mean Pearson={np.nanmean(pear):.4f}, Mean Spearman={np.nanmean(spear):.4f}")
+        return
 
     true_expression = adata_test.X.toarray() if hasattr(adata_test.X, "toarray") else adata_test.X
     true_is_zero = (true_expression == 0.0)

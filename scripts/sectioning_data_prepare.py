@@ -20,8 +20,6 @@ def get_args():
     )
     parser.add_argument('--alpha_multiplier', type=float, default=14.0, 
                         help='Multiplier for average distance to determine Alpha Shape.')
-    parser.add_argument('--cat_keys', type=str, nargs='+', default=[],
-                        help='List of categorical variables in adata.obs to prepare for sectioning prediction.')
     
     args = parser.parse_args()
     return process_args(args)

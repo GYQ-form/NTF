@@ -173,3 +173,8 @@ poetry.toml
 
 # LSP config files
 pyrightconfig.json
+# private full code records (not for release)
+analysis_private/
+
+# generated tutorial outputs (notebooks themselves are tracked)
+tutorial/outputs/

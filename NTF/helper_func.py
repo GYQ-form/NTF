@@ -159,14 +159,12 @@ def calculate_spatial_metrics(adata: sc.AnnData, prediction_layer: str = 'predic
     coords = coords_scaled.astype(int)
     grid_dims = coords.max(axis=0) + 1
 
-    # Re-check and adjust if any dimension became too small due to integer rounding
-    actual_min_dim = grid_dims.min()
-    if actual_min_dim < 3:
-        # Force scale up to ensure at least 3 in minimum dimension
-        scale_factor = 3.0 / min_dim
-        coords_scaled = (coords_original - coords_min) * scale_factor
-        coords = coords_scaled.astype(int)
-        grid_dims = coords.max(axis=0) + 1
+    # Re-check and adjust if any dimension became too small due to integer rounding.
+    # Pad tiny grid axes up to 3 voxels (they stay empty in both volumes) instead of
+    # rescaling up: on thin test sets (few z layers) the old forced rescale exploded
+    # the x/y grid to thousands of voxels per axis, making per-gene SSIM intractable.
+    # (Patched 2026-09-23 for the Deep-STARmap benchmark.)
+    grid_dims = np.maximum(grid_dims, 3)
 
     # Dynamically determine SSIM window size (must be odd and <= smallest grid dimension)
     min_dim = grid_dims.min()

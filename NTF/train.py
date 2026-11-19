@@ -3,21 +3,23 @@ import time
 import datetime
 import logging
 import os
+import pickle
 import torch
 import torch.optim as optim
 import anndata
-from tqdm import tqdm
+from tqdm.auto import tqdm
 from torch.utils.tensorboard import SummaryWriter
 
 from .models import NeuralTranscriptomicField, GeneINR, D_LOSS, S_LOSS, DS_LOSS, DO_LOSS, E_REG, B_REG
 from .data import SpatialOmicsDataset
+from .annotation import KNNLabelAnnotator
 from .utils import MovingAverage
 
 def train(
     adata: anndata.AnnData,
     args: Namespace
 ) -> GeneINR:
-    
+
     # --- TensorBoard and Logging Setup ---
     log_dir_base = getattr(args, 'log_dir', 'runs')
     run_name = 'NTF_' + datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
@@ -29,56 +31,70 @@ def train(
     patience = getattr(args, 'early_stopping_patience', 5)
     min_delta = getattr(args, 'early_stopping_delta', 1e-4)
     check_interval = getattr(args, 'early_stopping_check_interval', 500)
-    
+
     # Create training dataset
-    dataset = SpatialOmicsDataset(adata, args.slice_id)
+    cat_keys = getattr(args, 'cat_keys', None)
+    dataset = SpatialOmicsDataset(adata, args.slice_id, cat_keys=cat_keys)
     if args.n_epochs is not None:
         args.n_iter = args.n_epochs * (dataset.v.shape[0] // args.batch_size)
 
     bounding_box = dataset.bounding_box
-    
+
     model = NeuralTranscriptomicField(
         n_genes=dataset.n_genes, n_slices=dataset.n_slices,
         resolution=dataset.resolution,
         bounding_box=bounding_box, args=args,
         pos_weight=dataset.nonzero_to_zero_ratio,
     )
-    
+
+    if cat_keys and dataset.cat_labels:
+        model.inr.annotator = KNNLabelAnnotator(
+            dataset.xyz.numpy(), dataset.cat_labels, getattr(args, 'k_neighbors', 5)
+        )
+        logging.info(f"KNN label annotator built on {dataset.xyz.shape[0]} reference points "
+                     f"(k={model.inr.annotator.k_neighbors}) for: {list(dataset.cat_labels.keys())}")
+
     optimizer = torch.optim.Adam(
         model.parameters(), lr=args.learning_rate, betas=(0.9, 0.99),
-        eps=1e-15, weight_decay=1e-2
+        eps=1e-15, weight_decay=getattr(args, 'weight_decay', 1e-2)
     )
-    
+
     scheduler = optim.lr_scheduler.MultiStepLR(
         optimizer=optimizer,
         milestones=[int(m * args.n_iter) for m in args.milestones],
         gamma=args.gamma,
     )
-    
+
     fp16 = not args.single_precision
     scaler = torch.amp.GradScaler('cuda',enabled=fp16)
-    
+
     model.train()
     loss_weights = {
         D_LOSS: 1, S_LOSS: 1, B_REG: args.weight_bias, E_REG: args.weight_expr, DO_LOSS: args.weight_dropout,
     }
     average = MovingAverage(1 - 0.001)
-    
+
     # --- Early Stopping Initialization ---
     patience_counter = 0
     best_loss = float('inf')
     warmup_iters = 2 * check_interval
-    
+
     logging.info("NeuralTranscriptomicField training starts.")
-    
+
     # --- tqdm Progress Bar ---
     # Wrap main loop with tqdm and set a description
-    pbar = tqdm(range(1, args.n_iter + 1), desc="Training NeuralTranscriptomicField")
+    pbar = tqdm(
+        range(1, args.n_iter + 1),
+        desc="Training NeuralTranscriptomicField",
+        dynamic_ncols=True,
+        mininterval=1.0,
+        leave=True,
+    )
 
     train_start_time = time.time()
     for i in pbar:
         batch = dataset.get_batch(args.batch_size, args.device)
-        
+
         with torch.amp.autocast('cuda',enabled=fp16):
             losses = model(**batch)
             loss = losses[DS_LOSS] + \
@@ -90,13 +106,13 @@ def train(
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad()
-        
+
         # Update moving average for all losses
         for k in losses:
             if losses[k] is not None:
                 average(k, losses[k].item())
         average('All', loss.item())
-        
+
         # --- Update tqdm progress bar with live metrics ---
         postfix_dict = {
             'DSLoss': f'{average[DS_LOSS]:.4f}',
@@ -110,7 +126,7 @@ def train(
         # --- Periodic Logging and Early Stopping Check ---
         if i % check_interval == 0 or i == args.n_iter:
             current_loss = average['All']
-            
+
             # --- Log to TensorBoard ---
             writer.add_scalar('Loss/total_moving_avg', current_loss, i)
 
@@ -122,7 +138,7 @@ def train(
                     torch.save(model.state_dict(), os.path.join(args.output_dir, 'best_model.pth'))
                 else:
                     patience_counter += 1
-                
+
                 # Log patience to console and TensorBoard
                 tqdm.write(f"Iter: {i}, Loss: {current_loss:.6f}, Best: {best_loss:.6f}, Patience: {patience_counter}/{patience}")
                 writer.add_scalar('EarlyStopping/patience_counter', patience_counter, i)
@@ -131,7 +147,7 @@ def train(
                     tqdm.write(f"Early stopping triggered at iteration {i}.")
                     model.load_state_dict(torch.load(os.path.join(args.output_dir, 'best_model.pth')))
                     break
-        
+
         # Scheduler Step
         scheduler.step()
 
@@ -139,5 +155,12 @@ def train(
     pbar.close() # close progress bar
     writer.close() # close TensorBoard writer
     logging.info(f"Training finished. Time elapsed: {train_elapsed:.2f} seconds ({train_elapsed/60:.2f} minutes).")
-    
+
+    annotator = getattr(model.inr, 'annotator', None)
+    if annotator is not None:
+        annotator_path = os.path.join(args.output_dir, 'label_annotator.pkl')
+        with open(annotator_path, 'wb') as f:
+            pickle.dump(annotator, f)
+        logging.info(f"KNN label annotator saved to: {annotator_path}")
+
     return model

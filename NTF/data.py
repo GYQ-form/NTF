@@ -1,6 +1,8 @@
 from typing import Dict
+import logging
 import torch
 import anndata
+import pandas as pd
 from scipy.spatial import cKDTree
 import numpy as np
 
@@ -8,8 +10,8 @@ class SpatialOmicsDataset:
     """
     Creates a dataset from an AnnData object for training the NTF model.
     """
-    def __init__(self, adata: anndata.AnnData, slice_id_obs: str = 'slice_id', spatial_obsm: str = 'spatial'):
-        
+    def __init__(self, adata: anndata.AnnData, slice_id_obs: str = 'slice_id', spatial_obsm: str = 'spatial', cat_keys: list = None):
+
         if slice_id_obs not in adata.obs:
             raise ValueError(f"Slice ID column '{slice_id_obs}' not found in adata.obs")
         if spatial_obsm not in adata.obsm:
@@ -17,13 +19,22 @@ class SpatialOmicsDataset:
 
         self.xyz = torch.from_numpy(adata.obsm[spatial_obsm]).float()
         self.v = torch.from_numpy(adata.X.toarray() if hasattr(adata.X, "toarray") else adata.X).float()
-        
+
         # Create slice indices from obs column
         slice_ids = adata.obs[slice_id_obs].astype('category').cat
         self.slice_idx = torch.from_numpy(slice_ids.codes.to_numpy().copy()).long()
         self.slice_map = dict(enumerate(slice_ids.categories))
         self.n_slices = len(self.slice_map)
-        
+
+        # Categorical labels (e.g., cell types) for model-side KNN annotation
+        self.cat_labels = {}
+        if cat_keys:
+            for key in cat_keys:
+                if key in adata.obs:
+                    self.cat_labels[key] = pd.Categorical(adata.obs[key])
+                else:
+                    logging.warning(f"Variable '{key}' not found in adata.obs; skipping.")
+
         # adaptive resolution per slice estimation
         self.resolution = self._estimate_resolution(self.xyz)
 
@@ -54,7 +65,7 @@ class SpatialOmicsDataset:
             abs_diffs[abs_diffs == 0] = np.inf
             per_axis_median.append(np.median(np.min(abs_diffs, axis=0)))
         return torch.tensor(per_axis_median, dtype=torch.float32)
-        
+
     @property
     def bounding_box(self) -> torch.Tensor:
         # Add a margin to the bounding box
@@ -62,14 +73,19 @@ class SpatialOmicsDataset:
         xyz_min = self.xyz.amin(0) - margin
         xyz_max = self.xyz.amax(0) + margin
         return torch.stack([xyz_min, xyz_max], 0)
-    
+
     @property
     def nonzero_to_zero_ratio(self) -> torch.Tensor:
         nonzero = (self.v > 0).float().sum(0)
         zero = (self.v == 0).float().sum(0)
         ratio = torch.where(nonzero == 0, torch.tensor(1.0, device=nonzero.device), nonzero / zero)
-        return ratio   
-    
+        # A gene with no zero entries yields an infinite ratio, which makes
+        # BCE-with-logits produce NaN via inf * 0 in its pos_weight term.
+        # Such genes never present a positive (is_zero) target during training,
+        # so any finite weight is loss-equivalent; fall back to 1.0.
+        ratio = torch.where(torch.isfinite(ratio), ratio, torch.ones_like(ratio))
+        return ratio
+
     @property
     def expression_mean(self) -> torch.Tensor:
         return self.v.mean(0)
@@ -83,7 +99,7 @@ class SpatialOmicsDataset:
             self.xyz = self.xyz[idx]
             self.v = self.v[idx]
             self.slice_idx = self.slice_idx[idx]
-        
+
         # Fetch a batch and move to device
         s = slice(self.count, self.count + batch_size)
         batch = {
@@ -105,12 +121,12 @@ class SpatialOmicsDataset:
             xyz_max = self.xyz.amax(0)
             shape_xyz = ((xyz_max - xyz_min) / resolution_min).ceil().long()
             shape = (int(shape_xyz[2]), int(shape_xyz[1]), int(shape_xyz[0]))
-            
+
             kji = ((self.xyz - xyz_min) / resolution_min).round().long()
-            
+
             mask = torch.bincount(
                 kji[..., 0] + shape[2] * kji[..., 1] + shape[2] * shape[1] * kji[..., 2],
                 minlength=shape[0] * shape[1] * shape[2],
             ).view(shape) > 0
-            
+
             return mask.float()

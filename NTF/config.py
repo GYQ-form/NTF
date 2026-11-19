@@ -34,6 +34,7 @@ def add_shared_args(description="NTF Model Training"):
     train_group.add_argument('--n_iter', type=int, default=20000, help='Total training iterations.')
     train_group.add_argument('--batch_size', type=int, default=8192, help='Batch size for training.')
     train_group.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate.')
+    train_group.add_argument('--weight_decay', type=float, default=1e-2, help='Adam weight decay (L2, coupled).')
     train_group.add_argument('--milestones', type=float, nargs='+', default=[0.5, 0.7, 0.9], help='LR scheduler milestones (as fractions of n_iter).')
     train_group.add_argument('--gamma', type=float, default=0.5, help='LR decay factor.')
 
@@ -71,7 +72,16 @@ def add_shared_args(description="NTF Model Training"):
     # Dropout-related
     loss_group.add_argument('--no_dropout', action='store_true', help='Disable the dropout prediction network to handle zero-inflation.')
     loss_group.add_argument('--weight_dropout', type=float, default=2000.0, help='Weight for dropout loss.')
-    
+
+    # ==========================================
+    #           5. Cell Typing
+    # ==========================================
+    ct_group = parser.add_argument_group('Cell Typing')
+    ct_group.add_argument('--cat_keys', type=str, nargs='+', default=[],
+                          help='List of categorical variables in adata.obs (e.g., cell types) to annotate at query points via KNN majority voting.')
+    ct_group.add_argument('--k_neighbors', type=int, default=5,
+                          help='Number of nearest neighbors to use for majority voting of categorical variables.')
+
     return parser
 
 

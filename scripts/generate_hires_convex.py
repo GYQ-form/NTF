@@ -5,8 +5,7 @@ import logging
 import argparse
 import os
 import time
-from scipy.spatial import ConvexHull, Delaunay, cKDTree
-from scipy.stats import mode
+from scipy.spatial import ConvexHull, Delaunay
 import pandas as pd
 import warnings
 
@@ -63,11 +62,6 @@ def get_args():
     task_group = parser.add_argument_group('Task Specific: Generation')
     task_group.add_argument('--n_generate', type=int, default=1000000, help='Number of new points to generate.')
     
-    task_group.add_argument('--cat_keys', type=str, nargs='+', default=[],
-                            help='List of categorical variables in adata.obs to predict via KNN voting (e.g., cell_type).')
-    task_group.add_argument('--k_neighbors', type=int, default=5,
-                            help='Number of nearest neighbors to use for majority voting of categorical variables.')
-    
     args = parser.parse_args()
     args = process_args(args)
     return args
@@ -117,34 +111,12 @@ def main():
     predicted_expression = prediction_results["expression"].cpu().numpy()
     obs_df = pd.DataFrame(index=[f"new_cell_{i}" for i in range(len(new_raw_coords))])
 
-    # --- 5. KNN-based majority voting for categorical variables ---
-    if args.cat_keys:
-        logging.info(f"Running KNN (k={args.k_neighbors}) majority voting for categorical variables on generated points...")
-        tree = cKDTree(raw_coords)
-        k = min(args.k_neighbors, len(raw_coords))
-        distances, indices = tree.query(new_raw_coords, k=k)
-        
-        if k == 1:
-            indices = indices.reshape(-1, 1)
-
-        for key in args.cat_keys:
-            if key not in adata.obs:
-                logging.warning(f"Variable '{key}' not found in adata.obs; skipping.")
-                continue
-            cat_series = pd.Categorical(adata.obs[key])
-            codes = cat_series.codes        
-            categories = cat_series.categories 
-            
-            neighbor_codes = codes[indices]
-            try:
-                voted_modes, _ = mode(neighbor_codes, axis=1, keepdims=False)
-            except TypeError:
-                voted_modes, _ = mode(neighbor_codes, axis=1)
-                
-            voted_modes = voted_modes.flatten()
-            obs_df[key] = categories[voted_modes]
-            obs_df[key] = obs_df[key].astype("category")
-        logging.info(f"KNN categorical voting complete: {args.cat_keys}")
+    # --- 5. Categorical labels predicted by the model-side KNN annotator ---
+    if 'labels' in prediction_results:
+        annotator = trained_inr.annotator
+        for key, values in prediction_results['labels'].items():
+            obs_df[key] = pd.Categorical(values, categories=annotator.categories[key])
+        logging.info(f"Categorical labels assigned by KNN annotator: {list(prediction_results['labels'].keys())}")
 
     adata_hires = anndata.AnnData(X=predicted_expression, obs=obs_df, var=adata.var)
     adata_hires.obsm['spatial'] = new_raw_coords

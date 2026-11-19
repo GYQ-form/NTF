@@ -242,7 +242,12 @@ class NeuralTranscriptomicField(nn.Module):
         log_bias = results.get("log_bias", torch.tensor(0))
         bias = torch.exp(log_bias)
         v_out = (bias * v_out_samples).mean(1)
-        var = torch.exp(results.get("log_var", 0))
+        # --no_pixel_variance removes sigma_net, so log_var is absent; fall back
+        # to unit variance (pure MSE up to a constant factor).
+        if "log_var" in results:
+            var = torch.exp(results["log_var"])
+        else:
+            var = torch.ones_like(v_out_samples)
         if not self.args.no_slice_variance:
             var = var + self.log_var_slice.exp()[slice_idx].unsqueeze(1)
         var = (bias.detach()**2 * var).mean(1)
@@ -317,7 +322,7 @@ class NeuralTranscriptomicField(nn.Module):
         Selects different strategies based on the value of args.weight_expr.
         """
         if self.args.weight_expr == 0:
-            return 0.0
+            return torch.zeros((), device=xyz.device)
 
         # 1. Use a subset of sampled points for regularization to reduce computation
         n_sample = min(4, expression.shape[1])
